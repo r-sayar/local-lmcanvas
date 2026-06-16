@@ -6,6 +6,7 @@ import type {
   SDKResultMessage,
   SDKPartialAssistantMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join, sep } from "node:path";
 import { existsSync } from "node:fs";
@@ -99,11 +100,22 @@ import { normalizeUsage } from "../agents/usage";
 
 const ASK_USER_SYSTEM_NOTE = `\n\nWhen you need to ask the local user a structured multiple-choice question, use the \`mcp__lmc__ask_user_question\` tool. It renders an interactive picker inside the local-lmcanvas app. Do NOT use the built-in AskUserQuestion tool — it is disabled in this environment.`;
 
+function resolveSystemClaude(): string | undefined {
+  const cmd = process.platform === "win32" ? "where claude" : "which claude";
+  try {
+    const result = execSync(cmd, { encoding: "utf8" }).trim().split("\n")[0];
+    return result || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export type { RunnerEvent };
 
 export type RunClaudeOpts = {
   cwd: string;
   model?: string;
+  binPath?: string;
   systemPrompt?: string;
   attachments?: Attachment[];
   signal?: AbortSignal;
@@ -157,7 +169,7 @@ export async function runClaude(prompt: string, opts: RunClaudeOpts): Promise<vo
         permissionMode: opts.planMode ? "plan" : "bypassPermissions",
         allowDangerouslySkipPermissions: !opts.planMode,
         model: opts.model,
-        pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
+        pathToClaudeCodeExecutable: opts.binPath || resolveSystemClaude() || CLAUDE_BIN_PATH,
         // append vs raw: we always extend claude_code preset so the agent
         // keeps its built-in tooling instructions
         systemPrompt: {
