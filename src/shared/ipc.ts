@@ -166,6 +166,11 @@ export type ProviderAuthStatus = {
   detail?: string;
 };
 
+export type TerminalCreateArgs = {
+  id: string;
+  cwd: string;
+};
+
 export type LmcApi = {
   canvases: {
     list(): Promise<CanvasSummary[]>;
@@ -227,6 +232,18 @@ export type LmcApi = {
   canvasName: {
     /** Generate an LLM-backed canvas name from the first prompt. Returns null on failure so the caller keeps its prompt-derived fallback. */
     generate(args: GenerateCanvasNameRequest): Promise<string | null>;
+  };
+  terminal: {
+    /** Create (or attach to existing) a PTY running `claude` in the given cwd. */
+    create(args: TerminalCreateArgs): Promise<void>;
+    /** Send raw input bytes to the PTY. */
+    input(id: string, data: string): void;
+    /** Notify the PTY of a terminal resize. */
+    resize(id: string, cols: number, rows: number): void;
+    /** Kill the PTY session. */
+    kill(id: string): Promise<void>;
+    /** Subscribe to data coming back from the PTY. Returns an unsubscribe fn. */
+    onData(handler: (id: string, data: string) => void): () => void;
   };
 };
 

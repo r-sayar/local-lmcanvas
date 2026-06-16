@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Globe, Settings } from "lucide-react";
+import { Globe, Settings, TerminalSquare } from "lucide-react";
 import { CanvasPane } from "@/components/Canvas/CanvasPane";
 import { SplitDivider } from "@/components/Canvas/SplitDivider";
 import { SettingsModal } from "@/components/SettingsModal";
@@ -7,8 +7,10 @@ import { BrowserPanel } from "@/components/BrowserPanel/BrowserPanel";
 import { NodePanel } from "@/components/NodePanel/NodePanel";
 import { CanvasManager } from "@/components/CanvasManager/CanvasManager";
 import { SplitPanePicker } from "@/components/CanvasManager/SplitPanePicker";
+import { TerminalPanel } from "@/components/TerminalPanel/TerminalPanel";
 import { useActivePaneStore } from "@/hooks/useActivePane";
 import { useBrowserPanelStore } from "@/hooks/useBrowserPanelStore";
+import { useTerminalStore } from "@/hooks/useTerminalStore";
 import {
   TIMELINE_PANEL_WIDTH,
   useTimelinePanelStore,
@@ -35,6 +37,9 @@ export function CanvasPage({ ids }: CanvasPageProps) {
   const activePaneId = useActivePaneStore((s) => s.activePaneId);
   const browserOpen = useBrowserPanelStore((s) => s.open);
   const toggleBrowser = useBrowserPanelStore((s) => s.toggle);
+  const terminalOpen = useTerminalStore((s) => s.open);
+  const toggleTerminal = useTerminalStore((s) => s.toggle);
+  const terminalHeight = useTerminalStore((s) => s.height);
   const timelineOpen = useTimelinePanelStore((s) => s.open);
   const selectedNodeId = useActiveSelectedNodeId();
   // Either drawer occupies the same right slot. When a node is selected, the
@@ -60,10 +65,15 @@ export function CanvasPage({ ids }: CanvasPageProps) {
         e.preventDefault();
         setShowSplitPicker((v) => !v);
       }
+      // Ctrl+` toggles the terminal panel
+      if (e.ctrlKey && e.key === "`") {
+        e.preventDefault();
+        toggleTerminal();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [splitPickerShortcut]);
+  }, [splitPickerShortcut, toggleTerminal]);
 
   // Sidebar tracks whichever pane is active so highlight + sidebar actions
   // follow the user's focus.
@@ -92,6 +102,17 @@ export function CanvasPage({ ids }: CanvasPageProps) {
         }}
       >
         <button
+          onClick={toggleTerminal}
+          className={`flex h-7 w-7 items-center justify-center rounded-md cursor-pointer ${
+            terminalOpen
+              ? "bg-muted text-foreground"
+              : "text-foreground/70 hover:text-foreground hover:bg-muted"
+          }`}
+          title={terminalOpen ? "hide terminal (Ctrl+`)" : "show terminal (Ctrl+`)"}
+        >
+          <TerminalSquare size={14} />
+        </button>
+        <button
           onClick={toggleBrowser}
           className={`flex h-7 w-7 items-center justify-center rounded-md cursor-pointer ${
             browserOpen
@@ -112,7 +133,11 @@ export function CanvasPage({ ids }: CanvasPageProps) {
       </div>
 
       {/* Panes */}
-      <div ref={splitContainerRef} className="absolute inset-0 flex">
+      <div
+        ref={splitContainerRef}
+        className="absolute inset-0 flex"
+        style={{ bottom: terminalOpen ? terminalHeight : 0 }}
+      >
         {isSplit ? (
           <>
             <div style={{ width: `${splitFraction * 100}%` }} className="h-full">
@@ -150,6 +175,8 @@ export function CanvasPage({ ids }: CanvasPageProps) {
       )}
 
       <TimelinePanel />
+
+      <TerminalPanel canvasId={ids[0]} />
 
       <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
       <SplitPanePicker

@@ -9,6 +9,7 @@ import type {
   LmcApi,
   CanvasCreateArgs,
   PersistentProcessStartArgs,
+  TerminalCreateArgs,
 } from "@shared/ipc";
 import type { AppSettings, Canvas, Provider } from "@shared/types";
 
@@ -79,6 +80,20 @@ const api: LmcApi = {
   canvasName: {
     generate: (args: GenerateCanvasNameRequest) =>
       ipcRenderer.invoke("canvasName:generate", args),
+  },
+};
+
+api.terminal = {
+  create: (args: TerminalCreateArgs) => ipcRenderer.invoke("terminal:create", args),
+  input: (id: string, data: string) => ipcRenderer.send("terminal:input", id, data),
+  resize: (id: string, cols: number, rows: number) =>
+    ipcRenderer.send("terminal:resize", id, cols, rows),
+  kill: (id: string) => ipcRenderer.invoke("terminal:kill", id),
+  onData: (handler: (id: string, data: string) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, id: string, data: string) =>
+      handler(id, data);
+    ipcRenderer.on("terminal:data", listener);
+    return () => ipcRenderer.off("terminal:data", listener);
   },
 };
 

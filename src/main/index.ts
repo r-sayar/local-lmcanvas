@@ -23,6 +23,8 @@ import {
   completeRequest as completeAskUser,
 } from "./claude/askUserBridge";
 import { getShellPath } from "./shellPath";
+import { createPty, writePty, resizePty, killPty } from "./terminal/pty";
+import { execSync } from "node:child_process";
 import { initAutoUpdate, checkForUpdatesNow } from "./autoUpdate";
 import type {
   AskUserResponsePayload,
@@ -34,6 +36,7 @@ import type {
   FileEntry,
   GenerateGroupSummaryRequest,
   SlashItem,
+  TerminalCreateArgs,
 } from "@shared/ipc";
 import type { AppSettings, Canvas, Provider } from "@shared/types";
 
@@ -377,6 +380,36 @@ function registerIpc(): void {
       }
     },
   );
+
+  ipcMain.handle("terminal:create", async (e, args: TerminalCreateArgs) => {
+    const settings = await readSettings();
+    const configuredBin = settings.providers?.claude?.binPath ?? settings.claudeBinPath;
+    let claudeBin = configuredBin;
+    if (!claudeBin) {
+      try {
+        const cmd = process.platform === "win32" ? "where claude" : "which claude";
+        claudeBin = execSync(cmd, { encoding: "utf8" }).trim().split("\n")[0];
+      } catch {
+        claudeBin = "claude";
+      }
+    }
+    const cwd = args.cwd || homedir();
+    createPty(args.id, claudeBin, cwd, (data) => {
+      e.sender.send("terminal:data", args.id, data);
+    });
+  });
+
+  ipcMain.on("terminal:input", (_e, id: string, data: string) => {
+    writePty(id, data);
+  });
+
+  ipcMain.on("terminal:resize", (_e, id: string, cols: number, rows: number) => {
+    resizePty(id, cols, rows);
+  });
+
+  ipcMain.handle("terminal:kill", async (_e, id: string) => {
+    killPty(id);
+  });
 }
 
 function installUpdateMenuItem(): void {
