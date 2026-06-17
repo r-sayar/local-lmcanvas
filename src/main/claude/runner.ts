@@ -92,7 +92,6 @@ import type {
   TextBlockParam,
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
-import type { WebContents } from "electron";
 import type { Attachment } from "@shared/ipc";
 import { buildAskUserServer } from "./askUserMcp";
 import { isAuthError, type RunnerEvent } from "../agents/types";
@@ -119,10 +118,10 @@ export type RunClaudeOpts = {
   systemPrompt?: string;
   attachments?: Attachment[];
   signal?: AbortSignal;
-  /** When true, the SDK runs in plan mode (read-only: model proposes a plan but can't use mutating tools). */
   planMode?: boolean;
-  webContents: WebContents;
+  sessionId: string;
   nodeId: string;
+  sendToClient: (msg: object) => void;
   onEvent: (ev: RunnerEvent) => void;
 };
 
@@ -156,7 +155,7 @@ export async function runClaude(prompt: string, opts: RunClaudeOpts): Promise<vo
   const promptInput: string | AsyncIterable<SDKUserMessage> =
     attachments.length > 0 ? buildStreamingPrompt(prompt, attachments) : prompt;
 
-  const askUserServer = buildAskUserServer(opts.webContents, opts.nodeId, controller.signal);
+  const askUserServer = buildAskUserServer(opts.sessionId, opts.nodeId, opts.sendToClient, controller.signal);
   const appendedSystemPrompt = (opts.systemPrompt ?? "") + ASK_USER_SYSTEM_NOTE;
 
   try {

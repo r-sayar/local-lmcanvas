@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { app } from "electron";
 import { shellEnv } from "./shellPath";
 import type {
   PersistentProcessStartArgs,
@@ -26,7 +25,7 @@ export async function startPersistentProcess(
   if (!command) throw new Error("Command is required.");
 
   const cwd = args.cwd && args.cwd.trim() ? args.cwd : homedir();
-  const dir = join(app.getPath("userData"), "persistent-processes");
+  const dir = join(homedir(), ".local-lmcanvas", "logs", "persistent-processes");
   mkdirSync(dir, { recursive: true });
 
   const id = `proc-${Date.now().toString(36)}-${Math.random()
