@@ -190,6 +190,7 @@ function registerIpc(): void {
       systemPromptOverride,
       nodeSettings,
       planMode: inlinePlanMode,
+      chatOnly: inlineChatOnly,
     } = args;
     const sender = e.sender;
 
@@ -233,6 +234,7 @@ function registerIpc(): void {
     // Plan mode resolves as: one-shot inline /plan OR persistent node setting.
     // Claude-only — codex/cursor runners ignore the flag.
     const planMode = Boolean(inlinePlanMode) || Boolean(nodeSettings?.planMode);
+    const chatOnly = Boolean(inlineChatOnly) || Boolean(nodeSettings?.chatOnly);
 
     const controller = new AbortController();
     activeChats.set(chatId, { controller, nodeId });
@@ -248,6 +250,7 @@ function registerIpc(): void {
         attachments,
         signal: controller.signal,
         planMode,
+        chatOnly,
         webContents: sender,
         nodeId,
         onEvent: (ev) => {

@@ -65,6 +65,10 @@ export type ChatData = {
   parentIds: NodeId[];
   childIds: NodeId[];
   addedContext?: string;
+  /** When true, the node auto-deletes 10s after its assistant message completes,
+   *  unless hovered (hover resets the countdown). Set when the user creates a
+   *  follow-up via the Timer half of the selection split-button. */
+  isTemporary?: boolean;
 };
 
 export type CanvasNodeType = "custom" | "stickyNote";
@@ -76,6 +80,8 @@ export type NodeSettings = {
   branch?: string;
   /** When true, the SDK runs in plan mode — model proposes a plan, cannot use mutating tools. Claude-only. */
   planMode?: boolean;
+  /** When true, skip the claude_code preset and disable agent tools — fast pure-chat path. Claude-only. */
+  chatOnly?: boolean;
 };
 
 export type CanvasNode = {

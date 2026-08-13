@@ -39,6 +39,10 @@ export type RunAgentOpts = {
   signal?: AbortSignal;
   binPath?: string;
   planMode?: boolean;
+  /** Claude-only; skip the claude_code preset for a fast pure-chat path. Ignored when planMode is also true. */
+  chatOnly?: boolean;
+  // sessionId/nodeId are claude-specific (askUser MCP), but kept required so
+  // the handler can pass a single opts object to any provider runner.
   sessionId: string;
   nodeId: string;
   sendToClient: (msg: object) => void;
