@@ -1,18 +1,18 @@
 import clsx from "clsx";
-import { Lightbulb } from "lucide-react";
+import { Zap } from "lucide-react";
 import type { NodeId } from "@shared/types";
 import { useCanvasStore } from "@/hooks/useCanvasStore";
 
 type Props = { nodeId: NodeId };
 
 /**
- * Toggle badge for per-node plan mode. Claude-only — codex/cursor runners
- * ignore the flag, so we hide the badge when those providers are active.
+ * Toggle badge for per-node fast chat mode. Drops the claude_code preset and
+ * agent tools so the model replies with chat-grade latency. Claude-only.
  */
-export function PlanBadge({ nodeId }: Props) {
+export function FastBadge({ nodeId }: Props) {
   const provider = useCanvasStore((s) => s.getEffectiveProvider(nodeId));
-  const planMode = useCanvasStore(
-    (s) => s.nodes[nodeId]?.data.nodeSettings?.planMode ?? false,
+  const chatOnly = useCanvasStore(
+    (s) => s.nodes[nodeId]?.data.nodeSettings?.chatOnly ?? false,
   );
   const setNodeSettings = useCanvasStore((s) => s.setNodeSettings);
 
@@ -24,31 +24,31 @@ export function PlanBadge({ nodeId }: Props) {
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          setNodeSettings(nodeId, { planMode: planMode ? undefined : true });
+          setNodeSettings(nodeId, { chatOnly: chatOnly ? undefined : true });
         }}
         onMouseDown={(e) => e.stopPropagation()}
         className={clsx(
           "flex items-center gap-1 rounded-sm border bg-card text-foreground px-1.5 py-[5px] text-xs font-medium cursor-pointer transition-colors",
           "hover:bg-muted",
-          planMode
+          chatOnly
             ? "border-accent/60 bg-accent/15 ring-1 ring-accent/30 hover:bg-accent/25"
             : "border-border",
         )}
         style={{ fontFamily: "var(--font-geist-pixel-square)" }}
         title={
-          planMode
-            ? "Plan mode ON for every message in this node · click to disable"
-            : "Plan mode OFF · click to enable (or type /plan for one-shot)"
+          chatOnly
+            ? "Fast chat mode ON — no agent tools, lower latency · click to disable"
+            : "Fast chat mode OFF · click to enable (or type /chat for one-shot)"
         }
-        aria-pressed={planMode}
+        aria-pressed={chatOnly}
       >
-        <Lightbulb
+        <Zap
           className={clsx(
             "w-[10px] h-[10px]",
-            planMode ? "text-accent" : "text-muted-foreground",
+            chatOnly ? "text-accent" : "text-muted-foreground",
           )}
         />
-        <span className="tracking-tight text-[8px] uppercase">plan</span>
+        <span className="tracking-tight text-[8px] uppercase">fast</span>
       </button>
     </div>
   );

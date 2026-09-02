@@ -107,14 +107,7 @@ async function probeClaude(bin: string, binPath: string | null): Promise<Provide
   }
   const installed = r.code === 0;
   const detail = (r.stdout || r.stderr || "").trim();
-  return {
-    provider: "claude",
-    installed,
-    // claude-agent-sdk handles its own auth; presence of the binary is enough
-    authenticated: installed,
-    binPath,
-    detail: detail || undefined,
-  };
+  return { provider: "claude", installed, authenticated: installed, binPath, detail: detail || undefined };
 }
 
 async function probeCodex(bin: string, binPath: string | null): Promise<ProviderAuthStatus> {
@@ -188,9 +181,12 @@ export async function openLoginTerminal(
     throw new Error(`openLoginTerminal is only supported on macOS for MVP.`);
   }
   const bin = binPath || DEFAULT_BIN[provider];
+  // Claude uses `auth login` sub-subcommand; other CLIs just use `login`.
+  const loginArgs = provider === "claude" ? "auth login" : "login";
   // escape double quotes for the embedded AppleScript string
-  const cmd = `${bin} login`.replace(/"/g, '\\"');
-  const script = `tell application "Terminal" to do script "${cmd}"`;
+  const cmd = `${bin} ${loginArgs}`.replace(/"/g, '\\"');
+  // `activate` brings Terminal to the foreground so it isn't hidden behind the browser.
+  const script = `tell application "Terminal"\n  activate\n  do script "${cmd}"\nend tell`;
   const env = await shellEnv();
   await new Promise<void>((resolve, reject) => {
     const proc = spawn("osascript", ["-e", script], { stdio: "ignore", env });

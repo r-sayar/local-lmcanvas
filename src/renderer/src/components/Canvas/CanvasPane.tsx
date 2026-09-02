@@ -22,6 +22,7 @@ import { FALLBACK_NODE_HEIGHT, NODE_WIDTH } from "@/lib/canvasConstants";
 import { useRegisterPaneStore } from "@/hooks/usePaneRegistry";
 import { useBranchRequestStore } from "@/hooks/useBranchRequestStore";
 import { useBranchFromNode } from "@/hooks/useBranchFromNode";
+import { useTerminalCapture } from "@/hooks/useTerminalCapture";
 
 type CanvasPaneProps = {
   /** The canvas to load into this pane. Also serves as the pane's identity. */
@@ -81,6 +82,10 @@ function CanvasPaneInner({ id, splitMode, controlsSide = "right" }: CanvasPanePr
   const centerOnNode = useCenterOnNode();
 
   const isActive = activePaneId === id;
+
+  // Terminal-capture events are global; only the focused pane should consume
+  // them, otherwise split view builds two nodes from one byte stream.
+  useTerminalCapture(!splitMode || isActive);
 
   useEffect(() => {
     if (id && canvasId !== id) void loadCanvas(id);

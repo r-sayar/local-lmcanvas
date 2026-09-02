@@ -1,11 +1,39 @@
 import type { Attachment } from "@shared/ipc";
-import type { ErrorCode, UsageSummary } from "@shared/types";
+import type { ErrorCode, TodoItem, UsageSummary } from "@shared/types";
 
 export type RunnerEvent =
   | { kind: "text_delta"; text: string }
-  | { kind: "tool_use"; toolUseId: string; name: string; input: unknown }
-  | { kind: "tool_result"; toolUseId: string; content: string; isError: boolean }
+  | {
+      kind: "tool_use";
+      toolUseId: string;
+      name: string;
+      input: unknown;
+      /** Set when a subagent made the call rather than the main thread. */
+      parentToolUseId?: string;
+    }
+  | {
+      kind: "tool_result";
+      toolUseId: string;
+      content: string;
+      isError: boolean;
+      parentToolUseId?: string;
+    }
   | { kind: "thinking_delta"; text: string }
+  /** The CLI session backing this run, from the `init` message. */
+  | { kind: "session"; sessionId: string }
+  /** Text or thinking produced inside a subagent. */
+  | {
+      kind: "subagent_delta";
+      parentToolUseId: string;
+      subKind: "text" | "thinking";
+      text: string;
+    }
+  | { kind: "subagent_progress"; parentToolUseId: string; summary: string }
+  | { kind: "todos"; todos: TodoItem[] }
+  | { kind: "hook"; event: string; status: "started" | "completed" | "failed"; detail?: string }
+  | { kind: "task_notification"; taskId: string; status: string; summary?: string }
+  | { kind: "prompt_suggestion"; prompt: string }
+  | { kind: "compact"; trigger: string }
   | {
       kind: "done";
       isError?: boolean;
@@ -31,6 +59,7 @@ export function isAuthError(message: string): boolean {
   return AUTH_PATTERNS.some((re) => re.test(message));
 }
 
+/** Options for the plain subprocess providers (codex, cursor). */
 export type RunAgentOpts = {
   cwd: string;
   model?: string;
@@ -38,10 +67,6 @@ export type RunAgentOpts = {
   attachments?: Attachment[];
   signal?: AbortSignal;
   binPath?: string;
-  planMode?: boolean;
-  sessionId: string;
-  nodeId: string;
-  sendToClient: (msg: object) => void;
   onEvent: (ev: RunnerEvent) => void;
 };
 

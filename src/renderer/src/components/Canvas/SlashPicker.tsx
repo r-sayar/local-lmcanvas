@@ -2,35 +2,6 @@ import { useEffect, useMemo, useRef } from "react";
 import { Sparkles, SquareSlash } from "lucide-react";
 import type { SlashItem } from "@shared/ipc";
 
-const itemsCacheByCwd = new Map<string, SlashItem[]>();
-const inflightByCwd = new Map<string, Promise<SlashItem[]>>();
-
-export async function getSlashItemsForCwd(cwd: string): Promise<SlashItem[]> {
-  const key = cwd ?? "";
-  const cached = itemsCacheByCwd.get(key);
-  if (cached) return cached;
-  const existing = inflightByCwd.get(key);
-  if (existing) return existing;
-  const p = window.api.slash
-    .list(key)
-    .then((items) => {
-      itemsCacheByCwd.set(key, items);
-      inflightByCwd.delete(key);
-      return items;
-    })
-    .catch((err) => {
-      inflightByCwd.delete(key);
-      throw err;
-    });
-  inflightByCwd.set(key, p);
-  return p;
-}
-
-export function invalidateSlashItemsCache(cwd?: string): void {
-  if (cwd) itemsCacheByCwd.delete(cwd);
-  else itemsCacheByCwd.clear();
-}
-
 type Props = {
   query: string;
   items: SlashItem[];
@@ -102,10 +73,23 @@ export function SlashPicker({
                   <span className="truncate">
                     <span className="text-muted-foreground">{prefix}</span>
                     <span className="text-foreground">{item.name}</span>
+                    {item.argumentHint && (
+                      <span className="ml-1 font-mono text-muted-foreground/70">
+                        {item.argumentHint}
+                      </span>
+                    )}
                   </span>
                   <span className="text-muted-foreground/70 text-[8px] uppercase tracking-wide shrink-0">
                     {item.kind === "skill" ? "skill" : item.source}
                   </span>
+                  {item.clientSide && (
+                    <span
+                      className="shrink-0 rounded border border-border px-1 text-[8px] uppercase tracking-wide text-muted-foreground"
+                      title="Handled by the app, never sent to the CLI"
+                    >
+                      local
+                    </span>
+                  )}
                 </div>
                 {item.description && (
                   <div className="text-muted-foreground truncate text-[9px]">

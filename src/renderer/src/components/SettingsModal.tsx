@@ -12,6 +12,7 @@ import {
   KeybindingsPage,
   FinishSoundSetting,
   Toggle,
+  ClaudeSettings,
 } from "./settings";
 
 type View = "main" | "keybindings";
@@ -19,9 +20,11 @@ type View = "main" | "keybindings";
 type Props = {
   open: boolean;
   onClose: () => void;
+  /** Directory the Claude capability probe runs in. Defaults to the user scope. */
+  cwd?: string;
 };
 
-export function SettingsModal({ open, onClose }: Props) {
+export function SettingsModal({ open, onClose, cwd }: Props) {
   const [settings, setSettings] = useState<AppSettings>({});
   const [saving, setSaving] = useState(false);
   const [showLegacy, setShowLegacy] = useState(false);
@@ -196,6 +199,13 @@ export function SettingsModal({ open, onClose }: Props) {
                   </div>
                 </div>
               </div>
+
+              <ClaudeSettings
+                settings={settings}
+                onChange={(patch) => setSettings((s) => ({ ...s, ...patch }))}
+                cwd={cwd}
+                active={open && view === "main"}
+              />
 
               <div className="pt-2 mt-1 border-t border-border">
                 <button

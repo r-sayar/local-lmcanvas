@@ -6,4 +6,6 @@ See [AGENTS.md](./AGENTS.md) for build commands, layout, and conventions.
 
 Always run `bun run typecheck` before reporting work complete.
 
+Always run the app (`bun run dev`) and test the changed behavior before reporting work complete.
+
 There are no tests or lint scripts; don't try to run them.

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { NodeSettings } from "@shared/types";
+import { NODE_SETTINGS_KEYS, hasNodeSettings } from "@shared/types";
 
 const MAX_RECENTS = 8;
 
@@ -41,13 +42,32 @@ function queueSettingsWrite(patch: SettingsPatch): void {
     });
 }
 
+/**
+ * Compare across every declared override.
+ *
+ * This used to look at provider/cwd/branch only, so changing just the model was
+ * treated as "no change" and never persisted — which is why a model override
+ * never seeded a newly created node.
+ */
 function sameNodeSettings(
   a: NodeSettings | undefined,
   b: NodeSettings | undefined,
 ): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.provider === b.provider && a.cwd === b.cwd && a.branch === b.branch;
+  return NODE_SETTINGS_KEYS.every((k) => shallowEqual(a[k], b[k]));
+}
+
+/** Enough for the scalar and small-array values NodeSettings actually holds. */
+function shallowEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((v, i) => v === b[i]);
+  }
+  if (typeof a === "object" && typeof b === "object" && a !== null && b !== null) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  return false;
 }
 
 export const useRecentsStore = create<RecentsState>((set, get) => ({
@@ -90,10 +110,9 @@ export const useRecentsStore = create<RecentsState>((set, get) => ({
     queueSettingsWrite({ recentBranches: next });
   },
   setLastNodeSettings: (settings) => {
-    const cleaned =
-      settings && (settings.provider || settings.cwd || settings.branch)
-        ? { ...settings }
-        : undefined;
+    // Checked against every key — the old three-field guard discarded
+    // model/permissionMode/chatOnly-only settings before they were stored.
+    const cleaned = hasNodeSettings(settings) ? { ...settings } : undefined;
     if (sameNodeSettings(get().lastNodeSettings, cleaned)) return;
     set({ lastNodeSettings: cleaned });
     queueSettingsWrite({ lastNodeSettings: cleaned });

@@ -1,5 +1,5 @@
 import { Command, File, Folder, Sparkles } from "lucide-react";
-import React from "react";
+import React, { memo } from "react";
 
 // Display segments for the user's submitted prompt. Distinct from
 // MentionEditor's edit-time Segment so the parser only has to consume the
@@ -127,7 +127,7 @@ type Props = {
   text: string;
 };
 
-export function UserMessageBody({ text }: Props) {
+function UserMessageBodyImpl({ text }: Props) {
   const segs = parseUserMessageText(text);
   return (
     <>
@@ -168,3 +168,5 @@ export function UserMessageBody({ text }: Props) {
     </>
   );
 }
+
+export const UserMessageBody = memo(UserMessageBodyImpl);

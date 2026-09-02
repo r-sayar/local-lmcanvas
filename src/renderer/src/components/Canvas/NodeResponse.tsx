@@ -1,20 +1,33 @@
 import { CircleStop, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import clsx from "clsx";
-import { useState } from "react";
-import type { ContentBlock, ImageBlock, Message, ToolUseBlock } from "@shared/types";
+import { memo, useMemo, useRef, useState } from "react";
+import type {
+  ContentBlock,
+  ImageBlock,
+  Message,
+  SubagentBlock,
+  ToolUseBlock,
+} from "@shared/types";
 import { TextBlockView } from "./blocks/TextBlockView";
 import { ToolGroupView } from "./blocks/ToolGroupView";
 import { ThinkingView } from "./blocks/ThinkingView";
+import { SubagentView } from "./blocks/SubagentView";
 import { ImagePreviewModal } from "./ImagePreviewModal";
 import { ErrorBlock } from "./ErrorBlock";
 import { pickSuggestionIcons } from "@/lib/suggestionIcon";
 
 const MAX_TOOLS_PER_CHUNK = 5;
 
+/** How many render items stay mounted at the tail of a long message. Anything
+ *  older sits behind a "show earlier" toggle so a 600-block transcript doesn't
+ *  mount 600 components. */
+const WINDOW_SIZE = 80;
+
 type RenderItem =
   | { kind: "text"; text: string; key: string }
   | { kind: "thinking"; text: string; key: string }
+  | { kind: "subagent"; block: SubagentBlock; key: string }
   | {
       kind: "toolGroup";
       blocks: ToolUseBlock[];
@@ -60,10 +73,73 @@ function groupBlocks(blocks: ContentBlock[]): RenderItem[] {
       items.push({ kind: "text", text: b.text, key: `t-${i}` });
     } else if (b.type === "thinking") {
       items.push({ kind: "thinking", text: b.text, key: `th-${i}` });
+    } else if (b.type === "subagent") {
+      items.push({ kind: "subagent", block: b, key: `sa-${b.parentToolUseId}` });
     }
   });
   flush();
   return items;
+}
+
+function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
+  if (a.key !== b.key) return false;
+  if (a.kind === "text" && b.kind === "text") return a.text === b.text;
+  if (a.kind === "thinking" && b.kind === "thinking") return a.text === b.text;
+  if (a.kind === "subagent" && b.kind === "subagent") return a.block === b.block;
+  if (a.kind === "toolGroup" && b.kind === "toolGroup") {
+    if (
+      a.summary !== b.summary ||
+      a.chunkIndex !== b.chunkIndex ||
+      a.totalChunks !== b.totalChunks ||
+      a.blocks.length !== b.blocks.length
+    ) {
+      return false;
+    }
+    return a.blocks.every((block, i) => block === b.blocks[i]);
+  }
+  return false;
+}
+
+/**
+ * `groupBlocks` allocates a fresh item (and a fresh `blocks` slice) on every
+ * call, which defeats `memo` on the views below. Re-use the previous item
+ * whenever its contents are unchanged so a streamed text delta only
+ * invalidates the one item that actually moved.
+ */
+function useRenderItems(blocks: ContentBlock[]): RenderItem[] {
+  const previous = useRef<RenderItem[]>([]);
+  return useMemo(() => {
+    const next = groupBlocks(blocks);
+    const prev = previous.current;
+    for (let i = 0; i < next.length; i++) {
+      const before = prev[i];
+      if (before && sameRenderItem(before, next[i])) next[i] = before;
+    }
+    previous.current = next;
+    return next;
+  }, [blocks]);
+}
+
+/** A subagent is still working while its own `Task` call has no result yet. */
+function isTaskRunning(
+  blocks: ContentBlock[],
+  parentToolUseId: string,
+  isStreaming: boolean,
+): boolean {
+  const task = blocks.find(
+    (b): b is ToolUseBlock => b.type === "tool_use" && b.id === parentToolUseId,
+  );
+  return task ? !task.result : isStreaming;
+}
+
+/** Content blocks represented by a run of render items — used for the
+ *  "show earlier" label so the count matches what the user sees collapsed. */
+function countBlocks(items: RenderItem[]): number {
+  let total = 0;
+  for (const item of items) {
+    total += item.kind === "toolGroup" ? item.blocks.length : 1;
+  }
+  return total;
 }
 
 type Props = {
@@ -73,9 +149,12 @@ type Props = {
   /** Click handler for a `<next-steps>` suggestion button — receives the
    *  full prompt the button represents. */
   onSuggestionClick?: (prompt: string) => void;
+  onDismissError?: () => void;
 };
 
-export function NodeResponse({ message, onStop, nodeId, onSuggestionClick }: Props) {
+function NodeResponseImpl({ message, onStop, nodeId, onSuggestionClick, onDismissError }: Props) {
+  const [showEarlier, setShowEarlier] = useState(false);
+  const items = useRenderItems(message.blocks);
   const isUser = message.role === "user";
   const isError = message.status === "error";
   const isStreaming = message.status === "streaming";
@@ -83,6 +162,11 @@ export function NodeResponse({ message, onStop, nodeId, onSuggestionClick }: Pro
     if (b.type === "text") return b.text.length > 0;
     return true;
   });
+
+  const windowStart =
+    showEarlier || items.length <= WINDOW_SIZE ? 0 : items.length - WINDOW_SIZE;
+  const hiddenBlockCount = windowStart > 0 ? countBlocks(items.slice(0, windowStart)) : 0;
+  const visibleItems = windowStart > 0 ? items.slice(windowStart) : items;
 
   if (isUser) {
     // Avera: prompt section renders the user's raw input as text-[10px] foreground.
@@ -119,15 +203,32 @@ export function NodeResponse({ message, onStop, nodeId, onSuggestionClick }: Pro
     >
       {isStreaming && !hasAnyContent && <GeneratingIndicator onStop={onStop} />}
 
+      {hiddenBlockCount > 0 && (
+        <ShowEarlierButton
+          count={hiddenBlockCount}
+          onClick={() => setShowEarlier(true)}
+        />
+      )}
+
       {(() => {
-        const items = groupBlocks(message.blocks);
         const lastIdx = items.length - 1;
-        return items.map((item, idx) => {
+        return visibleItems.map((item, i) => {
+          const idx = windowStart + i;
           if (item.kind === "text") {
             return <TextBlockView key={item.key} text={item.text} nodeId={nodeId} />;
           }
           if (item.kind === "thinking") {
             return <ThinkingView key={item.key} text={item.text} />;
+          }
+          if (item.kind === "subagent") {
+            return (
+              <SubagentView
+                key={item.key}
+                block={item.block}
+                nodeId={nodeId}
+                running={isTaskRunning(message.blocks, item.block.parentToolUseId, isStreaming)}
+              />
+            );
           }
           const awaitingText = isStreaming && idx === lastIdx;
           return (
@@ -150,7 +251,7 @@ export function NodeResponse({ message, onStop, nodeId, onSuggestionClick }: Pro
         </div>
       )}
 
-      {isError && message.error && <ErrorBlock message={message} />}
+      {isError && message.error && <ErrorBlock message={message} onDismiss={onDismissError} />}
 
       {message.suggestions && message.suggestions.length > 0 && onSuggestionClick && (
         <SuggestionButtons
@@ -159,6 +260,31 @@ export function NodeResponse({ message, onStop, nodeId, onSuggestionClick }: Pro
         />
       )}
     </div>
+  );
+}
+
+export const NodeResponse = memo(NodeResponseImpl);
+
+function ShowEarlierButton({
+  count,
+  onClick,
+}: {
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+      className="nodrag mb-1 self-start cursor-pointer rounded-md border border-border bg-card px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground focus:outline-none"
+    >
+      Show {count} earlier {count === 1 ? "block" : "blocks"}
+    </button>
   );
 }
 

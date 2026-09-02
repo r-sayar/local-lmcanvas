@@ -1,4 +1,10 @@
-@import url("https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap");
+/* Lato is bundled, not fetched. The Google Fonts import this replaces was an
+   outbound request on every launch in an app that promises to be fully local —
+   and it was blocked by the renderer's CSP anyway, so the font never actually
+   loaded and node content silently fell back. */
+@import "@fontsource/lato/400.css";
+@import "@fontsource/lato/700.css";
+@import "@fontsource/lato/900.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 @import "tailwindcss";
@@ -538,6 +544,39 @@ header.app-drag {
   font-weight: 600;
   color: var(--foreground);
 }
+
+/* hljs: let container control background; add dark-mode token palette */
+.hljs {
+  background: transparent !important;
+}
+.dark .hljs { color: #c9d1d9; }
+.dark .hljs-comment,
+.dark .hljs-quote { color: #8b949e; }
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-subst { color: #ff7b72; }
+.dark .hljs-string,
+.dark .hljs-attr,
+.dark .hljs-regexp,
+.dark .hljs-link { color: #a5d6ff; }
+.dark .hljs-number,
+.dark .hljs-literal,
+.dark .hljs-variable,
+.dark .hljs-template-variable { color: #79c0ff; }
+.dark .hljs-title,
+.dark .hljs-section { color: #d2a8ff; }
+.dark .hljs-name,
+.dark .hljs-tag { color: #7ee787; }
+.dark .hljs-built_in,
+.dark .hljs-builtin-name,
+.dark .hljs-type { color: #ffa657; }
+.dark .hljs-symbol,
+.dark .hljs-bullet,
+.dark .hljs-addition { color: #7ee787; }
+.dark .hljs-deletion { color: #ffa198; }
+.dark .hljs-meta { color: #79c0ff; }
+.dark .hljs-emphasis { font-style: italic; }
+.dark .hljs-strong { font-weight: bold; }
 
 /* shimmer for the streaming label (avera) */
 @keyframes shimmer {

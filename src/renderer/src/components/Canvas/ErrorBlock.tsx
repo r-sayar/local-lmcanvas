@@ -1,12 +1,12 @@
-import { KeyRound } from "lucide-react";
+import { KeyRound, X } from "lucide-react";
 import { motion } from "framer-motion";
 import type { Message } from "@shared/types";
 import { openSettings } from "@/lib/openSettings";
 import { PROVIDER_INFO } from "@/components/Onboarding/providerInfo";
 
-type Props = { message: Message };
+type Props = { message: Message; onDismiss?: () => void };
 
-export function ErrorBlock({ message }: Props) {
+export function ErrorBlock({ message, onDismiss }: Props) {
   if (!message.error) return null;
   const authRequired = message.errorCode === "auth_required";
   const providerName = message.errorProvider
@@ -15,10 +15,22 @@ export function ErrorBlock({ message }: Props) {
 
   return (
     <div className="mt-1 rounded-[6px] border border-destructive/30 bg-destructive/5 px-2 py-1.5">
-      <div className="text-[10px] text-destructive whitespace-pre-wrap">
-        {authRequired && providerName
-          ? `${providerName} authentication required. Sign in again to continue.`
-          : message.error}
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-[10px] text-destructive whitespace-pre-wrap">
+          {authRequired && providerName
+            ? `${providerName} auth error — try sending a new message. If it keeps failing, run \`claude auth login\` in your terminal.`
+            : message.error}
+        </div>
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="shrink-0 text-destructive/50 hover:text-destructive cursor-pointer mt-0.5"
+            title="Dismiss"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
       </div>
       {authRequired && (
         <motion.button
@@ -29,7 +41,7 @@ export function ErrorBlock({ message }: Props) {
           whileHover={{ scale: 1.02 }}
         >
           <KeyRound className="h-3 w-3" />
-          Re-authenticate in Settings
+          Open Settings
         </motion.button>
       )}
       {authRequired && (

@@ -158,13 +158,15 @@ export function useSelection(
 
   useEffect(() => {
     if (!showSelection) return undefined;
+    const container = containerRef.current;
+    if (!container) return undefined;
 
-    let frameId: number;
+    let frameId = 0;
+    let scheduled = false;
 
     const updateFromStoredRange = (): void => {
       const range = selectionRangeRef.current;
-      const container = containerRef.current;
-      if (!range || !container) return;
+      if (!range) return;
 
       const boxRect = container.getBoundingClientRect();
       const { relativeTop: nextRelativeTop, position: nextPosition } =
@@ -182,22 +184,51 @@ export function useSelection(
       );
     };
 
-    const tick = (): void => {
-      updateFromStoredRange();
-      frameId = requestAnimationFrame(tick);
+    // Coalesce every source of movement into at most one measurement per
+    // frame. A free-running rAF loop would force layout on every frame for as
+    // long as the selection exists, even when nothing moved.
+    const schedule = (): void => {
+      if (scheduled) return;
+      scheduled = true;
+      frameId = requestAnimationFrame(() => {
+        scheduled = false;
+        updateFromStoredRange();
+      });
     };
 
-    frameId = requestAnimationFrame(tick);
+    updateFromStoredRange();
 
-    const handleWindowChange = (): void => updateFromStoredRange();
+    // Panning/zooming the canvas and dragging the node both rewrite an inline
+    // transform rather than firing scroll events, so watch those attributes.
+    const transformTargets = [
+      container,
+      container.closest(".react-flow__viewport"),
+      container.closest(".react-flow__node"),
+    ].filter((el): el is Element => el !== null);
 
-    window.addEventListener("resize", handleWindowChange);
-    window.addEventListener("scroll", handleWindowChange, true);
+    const observers = transformTargets.map((el) => {
+      const observer = new MutationObserver(schedule);
+      observer.observe(el, { attributes: true, attributeFilter: ["style"] });
+      return observer;
+    });
+
+    // Content streaming in above the selection shifts it as well.
+    const contentObserver = new MutationObserver(schedule);
+    contentObserver.observe(container, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    observers.push(contentObserver);
+
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
 
     return () => {
       cancelAnimationFrame(frameId);
-      window.removeEventListener("resize", handleWindowChange);
-      window.removeEventListener("scroll", handleWindowChange, true);
+      for (const observer of observers) observer.disconnect();
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
     };
   }, [showSelection, computeSelectionMetrics, containerRef]);
 

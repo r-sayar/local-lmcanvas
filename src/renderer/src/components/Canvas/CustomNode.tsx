@@ -1,14 +1,14 @@
-import { memo, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useMemo, useRef, useState } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { GitMerge, Plus } from "lucide-react";
+import { CornerDownRight, GitMerge, Plus } from "lucide-react";
 import clsx from "clsx";
 import { MergeButton } from "./MergeButton";
 import { useCanvasStore } from "@/hooks/useCanvasStore";
 import { ModelBadge } from "./ModelBadge";
 import { FolderBadge } from "./FolderBadge";
-import { BranchBadge } from "./BranchBadge";
-import { PlanBadge } from "./PlanBadge";
+import { FastBadge } from "./FastBadge";
+import { PermissionModeBadge } from "./PermissionModeBadge";
 import { OnboardingTitle } from "./OnboardingTitle";
 import { useNodeChat } from "@/hooks/useNodeChat";
 import type { CanvasNode, ImageBlock } from "@shared/types";
@@ -16,12 +16,16 @@ import type { Attachment } from "@shared/ipc";
 import { NodeResponse } from "./NodeResponse";
 import { NodePromptInput, type NodePromptInputHandle } from "./NodePromptInput";
 import { AskUserPrompt } from "./AskUserPrompt";
+import { PermissionPrompt } from "./PermissionPrompt";
+import { TodoList } from "./TodoList";
 import { SelectionActionButton } from "./SelectionActionButton";
 import { CustomNodeContextBanner } from "./CustomNodeContextBanner";
+import { TemporaryBadge } from "./TemporaryBadge";
 import { NodeCopyButton } from "./NodeCopyButton";
 import { NodeSourceHandles, NodeTargetHandles } from "./NodeHandles";
 import { ResizeHandle } from "./ResizeHandle";
 import { useAskUserStore } from "@/hooks/useAskUserStore";
+import { usePermissionStore } from "@/hooks/usePermissionStore";
 import { useSelection } from "@/hooks/useSelection";
 import { NODE_WIDTH } from "@/lib/canvasConstants";
 import { useBranchFromNode } from "@/hooks/useBranchFromNode";
@@ -30,6 +34,7 @@ import { useNodeFileDrop } from "@/hooks/useNodeFileDrop";
 import { useNodeFinishSound } from "@/hooks/useNodeFinishSound";
 import { usePromptEdit } from "@/hooks/usePromptEdit";
 import { useSelectionBranchOnEnter } from "@/hooks/useSelectionBranchOnEnter";
+import { useTemporaryNodeAutodelete } from "@/hooks/useTemporaryNodeAutodelete";
 
 type CustomNodeData = CanvasNode["data"];
 
@@ -37,24 +42,34 @@ function CustomNodeImpl(props: NodeProps) {
   const { id, data, selected } = props;
   const nodeData = data as CustomNodeData;
   const { submit, stop, streaming } = useNodeChat(id);
+  const dismissMessageError = useCanvasStore((s) => s.dismissMessageError);
   const removeNode = useCanvasStore((s) => s.removeNode);
+  const patchNode = useCanvasStore((s) => s.patchNode);
   const merging = useCanvasStore((s) => s.merging);
   const mergeIds = useCanvasStore((s) => s.mergeIds);
   const startMerge = useCanvasStore((s) => s.startMerge);
   const toggleMergeNode = useCanvasStore((s) => s.toggleMergeNode);
   const askUserRequest = useAskUserStore((s) => s.byNode[id]);
-  const totalNodeCount = useCanvasStore((s) => Object.keys(s.nodes).length);
+  const permissionQueue = usePermissionStore((s) => s.queueByNode[id]);
+  const permissionRequest = permissionQueue?.[0];
+  const isSingleNode = useCanvasStore((s) => Object.keys(s.nodes).length === 1);
+  // Both prompts block the run until answered, so they get the same node accent.
+  const awaitingUser = Boolean(askUserRequest) || Boolean(permissionRequest);
 
   const [hovered, setHovered] = useState(false);
+  const [showAppendInput, setShowAppendInput] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<NodePromptInputHandle | null>(null);
   const selection = useSelection(rootRef);
 
   const messages = nodeData.chat.messages;
   const userMessage = messages.find((m) => m.role === "user");
-  const assistantMessage = messages.find((m) => m.role === "assistant");
   const hasSubmitted = Boolean(userMessage);
   const canEditPrompt = hasSubmitted;
+  const lastAssistantMsgIdx = messages.reduce<number>(
+    (last, m, idx) => (m.role === "assistant" ? idx : last),
+    -1,
+  );
 
   const userText = userMessage
     ? userMessage.blocks
@@ -72,6 +87,33 @@ function CustomNodeImpl(props: NodeProps) {
 
   const branch = useBranchFromNode(id);
   useSelectionBranchOnEnter(selection, branch);
+
+  // Stable identities so `NodeResponse` (memoized) doesn't re-render every
+  // block of every message whenever this node re-renders for hover/selection.
+  const handleSuggestionClick = useCallback(
+    (prompt: string) =>
+      branch({
+        prefill: prompt,
+        autoSubmit: true,
+        placeBelow: true,
+        focusViewport: false,
+      }),
+    [branch],
+  );
+
+  const dismissHandlers = useRef(new Map<string, () => void>());
+  const dismissHandlerFor = useCallback(
+    (messageId: string) => {
+      const cache = dismissHandlers.current;
+      let handler = cache.get(messageId);
+      if (!handler) {
+        handler = () => dismissMessageError(id, messageId);
+        cache.set(messageId, handler);
+      }
+      return handler;
+    },
+    [id, dismissMessageError],
+  );
 
   const promptEdit = usePromptEdit({
     nodeId: id,
@@ -99,6 +141,14 @@ function CustomNodeImpl(props: NodeProps) {
   const justFinished = useNodeFinishSound({ nodeId: id, streaming, hovered });
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  const isTemporary = Boolean(nodeData.chat.isTemporary);
+  const temporaryRemaining = useTemporaryNodeAutodelete({
+    nodeId: id,
+    isTemporary,
+    streaming,
+    hovered,
+    hasCompletedAssistant: lastAssistant?.status === "complete",
+  });
   const assistantText = lastAssistant
     ? lastAssistant.blocks
         .filter((b): b is { type: "text"; text: string } => b.type === "text")
@@ -107,7 +157,7 @@ function CustomNodeImpl(props: NodeProps) {
     : "";
 
   const showFollowUp = (hovered || selected) && hasSubmitted;
-  const showOnboarding = totalNodeCount === 1 && messages.length === 0 && !streaming;
+  const showOnboarding = isSingleNode && messages.length === 0 && !streaming;
   const isMergeSource = merging && mergeIds[0] === id;
   const isMergeSelected = merging && mergeIds.includes(id);
   const isMergeNode = nodeData.chat.parentIds.length > 1;
@@ -146,20 +196,31 @@ function CustomNodeImpl(props: NodeProps) {
         className={clsx(
           "relative border rounded-[10px] transition-colors duration-300 px-5 pb-4 pt-12 shadow-sm bg-card",
           nodeData.chat.addedContext && "rounded-t-none border-t-0",
+          isTemporary && "border-dashed border-amber-500/60",
           isMergeSource
             ? "border-accent ring-2 ring-accent ring-offset-2 ring-offset-background"
             : isMergeSelected
             ? "border-accent ring-2 ring-accent/70 ring-offset-2 ring-offset-background"
             : merging
             ? "border-border hover:border-accent/60 cursor-pointer"
-            : askUserRequest
+            : awaitingUser
             ? "border-yellow-400/60"
             : fileDrop.dragOver
             ? "border-accent bg-muted"
             : selected
             ? "border-accent bg-accent/10"
+            : isTemporary
+            ? "border-amber-500/60"
             : "border-border",
         )}
+        style={
+          isTemporary
+            ? {
+                boxShadow:
+                  "0 0 22px 0 color-mix(in oklab, rgb(245 158 11) 35%, transparent), 0 1px 2px 0 rgb(0 0 0 / 0.05)",
+              }
+            : undefined
+        }
         onDragOver={fileDrop.onDragOver}
         onDragLeave={fileDrop.onDragLeave}
         onDrop={fileDrop.onDrop}
@@ -174,7 +235,7 @@ function CustomNodeImpl(props: NodeProps) {
           toggleMergeNode(id);
         }}
       >
-        {askUserRequest && (
+        {awaitingUser && (
           <motion.div
             className="pointer-events-none absolute inset-0 rounded-[10px] bg-yellow-400"
             initial={{ opacity: 0 }}
@@ -185,13 +246,16 @@ function CustomNodeImpl(props: NodeProps) {
 
         <ResizeHandle nodeId={id} width={nodeWidth} isVisible={hovered || selected} />
 
-        <CustomNodeContextBanner addedContext={nodeData.chat.addedContext} />
+        <CustomNodeContextBanner
+          addedContext={nodeData.chat.addedContext}
+          isTemporary={isTemporary}
+        />
 
         <div className="absolute left-4 right-4 top-3 flex items-center gap-2 min-w-0">
           <ModelBadge nodeId={id} />
           <FolderBadge nodeId={id} />
-          <BranchBadge nodeId={id} />
-          <PlanBadge nodeId={id} />
+          <FastBadge nodeId={id} />
+          <PermissionModeBadge nodeId={id} />
           {isMergeNode && (
             <span
               className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
@@ -200,6 +264,16 @@ function CustomNodeImpl(props: NodeProps) {
               <GitMerge className="h-2.5 w-2.5" />
               {mergedConversationCount}
             </span>
+          )}
+          {isTemporary && (
+            <TemporaryBadge
+              remaining={temporaryRemaining}
+              onConvertToPersistent={() =>
+                patchNode(id, {
+                  chat: { ...nodeData.chat, isTemporary: false },
+                })
+              }
+            />
           )}
         </div>
 
@@ -243,53 +317,84 @@ function CustomNodeImpl(props: NodeProps) {
               autoFocus
             />
           )}
-          {userMessage && !promptEdit.isEditing && (
-            <div
-              onClick={promptEdit.begin}
-              className={clsx(canEditPrompt ? "cursor-text" : "cursor-default")}
-              title={canEditPrompt ? "Click to edit prompt" : undefined}
-            >
-              <NodeResponse message={userMessage} nodeId={id} />
-            </div>
-          )}
-          {userMessage && promptEdit.isEditing && (
-            <div className="-mx-1 -my-0.5 rounded-md bg-accent/10 px-1 py-0.5 ring-1 ring-accent/30">
+
+          {messages.map((msg, idx) => {
+            const isFirstUser = msg.role === "user" && idx === 0;
+            const isLastAsst = idx === lastAssistantMsgIdx;
+            return (
+              <Fragment key={msg.id}>
+                {idx > 0 && (
+                  <div className="my-4">
+                    <div className="h-px flex-1 bg-border" />
+                  </div>
+                )}
+                {isFirstUser && !promptEdit.isEditing ? (
+                  <div
+                    onClick={promptEdit.begin}
+                    className={clsx(canEditPrompt ? "cursor-text" : "cursor-default")}
+                    title={canEditPrompt ? "Click to edit prompt" : undefined}
+                  >
+                    <NodeResponse message={msg} nodeId={id} />
+                  </div>
+                ) : isFirstUser && promptEdit.isEditing ? (
+                  <div className="-mx-1 -my-0.5 rounded-md bg-accent/10 px-1 py-0.5 ring-1 ring-accent/30">
+                    <NodePromptInput
+                      ref={promptInputRef}
+                      nodeId={id}
+                      initialValue={userText}
+                      initialAttachments={userAttachments}
+                      onSubmit={promptEdit.commit}
+                      onCancel={promptEdit.cancel}
+                      onStop={stop}
+                      streaming={streaming}
+                      autoFocus
+                    />
+                    <div className="pt-1 text-[9px] leading-none text-muted-foreground">
+                      Editing — Enter to resend, Esc to cancel
+                    </div>
+                  </div>
+                ) : msg.role === "user" ? (
+                  <NodeResponse message={msg} nodeId={id} />
+                ) : (
+                  <NodeResponse
+                    message={msg}
+                    onStop={msg.status === "streaming" ? stop : undefined}
+                    nodeId={id}
+                    onSuggestionClick={isLastAsst ? handleSuggestionClick : undefined}
+                    onDismissError={
+                      msg.status === "error" ? dismissHandlerFor(msg.id) : undefined
+                    }
+                  />
+                )}
+              </Fragment>
+            );
+          })}
+
+          {showAppendInput && !streaming && (
+            <div className="mt-3 pt-3 border-t border-border/50">
               <NodePromptInput
-                ref={promptInputRef}
                 nodeId={id}
-                initialValue={userText}
-                initialAttachments={userAttachments}
-                onSubmit={promptEdit.commit}
-                onCancel={promptEdit.cancel}
+                onSubmit={(text, attachments) => {
+                  setShowAppendInput(false);
+                  submit(text, attachments);
+                }}
                 onStop={stop}
                 streaming={streaming}
                 autoFocus
+                onCancel={() => setShowAppendInput(false)}
               />
-              <div className="pt-1 text-[9px] leading-none text-muted-foreground">
-                Editing — Enter to resend, Esc to cancel
-              </div>
             </div>
           )}
-          {userMessage && assistantMessage && (
-            <div className="my-4">
-              <div className="h-px flex-1 bg-border" />
-            </div>
-          )}
-          {assistantMessage && (
-            <NodeResponse
-              message={assistantMessage}
-              onStop={stop}
-              nodeId={id}
-              onSuggestionClick={(prompt) =>
-                branch({
-                  prefill: prompt,
-                  autoSubmit: true,
-                  placeBelow: true,
-                  focusViewport: false,
-                })
-              }
+
+          <TodoList nodeId={id} />
+
+          {permissionRequest && (
+            <PermissionPrompt
+              request={permissionRequest}
+              queued={(permissionQueue?.length ?? 1) - 1}
             />
           )}
+
           {askUserRequest && <AskUserPrompt request={askUserRequest} />}
         </div>
 
@@ -302,6 +407,14 @@ function CustomNodeImpl(props: NodeProps) {
               branch({
                 addedContext: selection.text,
                 selectionViewportY: selection.position.y,
+              });
+              selection.clear({ removeRange: true });
+            }}
+            onTemporaryClick={() => {
+              branch({
+                addedContext: selection.text,
+                selectionViewportY: selection.position.y,
+                isTemporary: true,
               });
               selection.clear({ removeRange: true });
             }}
@@ -332,6 +445,22 @@ function CustomNodeImpl(props: NodeProps) {
               onClick={startMerge}
             />
           )}
+          {!merging && !streaming && !showAppendInput && (
+            <button
+              type="button"
+              onClick={() => setShowAppendInput(true)}
+              onMouseDown={(e) => e.stopPropagation()}
+              disabled={!showFollowUp}
+              className={clsx(
+                "flex h-7 items-center justify-center rounded-xl border border-border/60 bg-card text-foreground/70 px-2 text-xs font-semibold shadow-lg transition hover:bg-muted hover:opacity-90",
+                showFollowUp ? "cursor-pointer" : "cursor-default",
+              )}
+              title="Append to this block"
+              aria-label="Append to block"
+            >
+              <CornerDownRight className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => branch()}
@@ -341,8 +470,8 @@ function CustomNodeImpl(props: NodeProps) {
               "flex h-7 min-w-[50px] items-center justify-center gap-2 rounded-xl bg-foreground text-card px-2 text-xs font-semibold shadow-lg transition hover:opacity-90",
               showFollowUp ? "cursor-pointer" : "cursor-default",
             )}
-            title="Follow up · or begin typing"
-            aria-label="Create follow-up"
+            title="New block"
+            aria-label="Create new block"
           >
             <Plus className="h-3.5 w-3.5" />
           </button>

@@ -17,6 +17,7 @@ import {
 } from "@/hooks/useTimelinePanelStore";
 import { TimelinePanel } from "@/components/TimelinePanel/TimelinePanel";
 import { useActiveSelectedNodeId } from "@/hooks/useActiveSelectedNode";
+import { useActivePaneCwd } from "@/hooks/useActivePaneCwd";
 import { usePreferencesStore } from "@/hooks/usePreferencesStore";
 import { onOpenSettings } from "@/lib/openSettings";
 import { matchesShortcut } from "@/lib/shortcut";
@@ -79,6 +80,9 @@ export function CanvasPage({ ids }: CanvasPageProps) {
   // follow the user's focus.
   const sidebarCanvasId =
     isSplit && activePaneId === ids[1] ? ids[1] : ids[0];
+  // The terminal belongs to the pane the user is in, not always the left one.
+  const activeCanvasId = sidebarCanvasId;
+  const activePaneCwd = useActivePaneCwd();
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
@@ -164,21 +168,30 @@ export function CanvasPage({ ids }: CanvasPageProps) {
         )}
       </div>
 
-      {/* Right drawer: NodePanel takes priority when a node is selected;
-          otherwise the BrowserPanel renders per its own open/closed state.
-          Both drawers shift inward by the timeline panel's width when it's
-          open, so all three (drawer + timeline + canvas) coexist cleanly. */}
-      {nodeDrawerOpen ? (
-        <NodePanel rightOffset={timelineOffset} />
-      ) : (
+      {/* Right drawer. The browser is an explicit toggle, so it wins the slot
+          whenever it is open — selecting a node used to silently replace it
+          while the globe button still read as active. The NodePanel takes the
+          slot only when the browser is closed. Both shift inward by the
+          timeline panel's width so drawer + timeline + canvas coexist. */}
+      {browserOpen ? (
         <BrowserPanel rightOffset={timelineOffset} />
-      )}
+      ) : nodeDrawerOpen ? (
+        <NodePanel rightOffset={timelineOffset} />
+      ) : null}
 
       <TimelinePanel />
 
-      <TerminalPanel canvasId={ids[0]} />
+      {/* cwd follows the active pane so the embedded CLI starts in the canvas
+          folder rather than the user's home directory. */}
+      <TerminalPanel canvasId={activeCanvasId} cwd={activePaneCwd} />
 
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+      {/* Pass the active pane's cwd so the MCP/skills/agents listing reflects
+          the folder being worked in, not just the user-level configuration. */}
+      <SettingsModal
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        cwd={activePaneCwd}
+      />
       <SplitPanePicker
         open={showSplitPicker}
         onClose={() => setShowSplitPicker(false)}

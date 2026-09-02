@@ -1,63 +1,41 @@
 import { randomUUID } from "node:crypto";
-import type { AskUserQuestion, AskUserResponsePayload } from "../../shared/ipc";
+import type { AskUserQuestion, AskUserResponsePayload } from "@shared/ipc";
+import { RequestBridge } from "./pendingRequests";
 
-type Pending = {
-  resolve: (response: AskUserResponsePayload) => void;
-  reject: (err: unknown) => void;
-  sessionId: string;
-  signal?: AbortSignal;
-  abortHandler?: () => void;
-};
+/**
+ * Bridges the in-process `ask_user_question` MCP tool to whichever client owns
+ * the session, and waits for the answer.
+ *
+ * Routing is by opaque `sessionKey` rather than an Electron `WebContents`, so the
+ * same bridge serves the Electron host and the WebSocket host. Keeping it typed
+ * to `WebContents` is what left the two hosts calling incompatible signatures.
+ */
 
-const pending = new Map<string, Pending>();
+const bridge = new RequestBridge<AskUserResponsePayload>();
 
 export function requestAnswer(
   questions: AskUserQuestion[],
-  sessionId: string,
+  sessionKey: string,
   nodeId: string,
   send: (msg: object) => void,
   signal?: AbortSignal,
 ): Promise<AskUserResponsePayload> {
-  if (signal?.aborted) return Promise.reject(new Error("Aborted"));
-
   const id = randomUUID();
-  return new Promise<AskUserResponsePayload>((resolve, reject) => {
-    const entry: Pending = { resolve, reject, sessionId, signal };
-
-    if (signal) {
-      const onAbort = () => {
-        cleanup(id);
-        reject(new Error("Aborted"));
-      };
-      entry.abortHandler = onAbort;
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-
-    pending.set(id, entry);
-    send({ type: "askUser:request", data: { id, nodeId, questions } });
-  });
-}
-
-function cleanup(id: string): Pending | undefined {
-  const entry = pending.get(id);
-  if (!entry) return undefined;
-  pending.delete(id);
-  if (entry.signal && entry.abortHandler) {
-    entry.signal.removeEventListener("abort", entry.abortHandler);
-  }
-  return entry;
+  return bridge.request(
+    id,
+    sessionKey,
+    { type: "askUser:request", data: { id, nodeId, questions } },
+    send,
+    { id, cancelled: true },
+    signal,
+  );
 }
 
 export function completeRequest(payload: AskUserResponsePayload): void {
-  const entry = cleanup(payload.id);
-  if (!entry) return;
-  entry.resolve(payload);
+  bridge.complete(payload.id, payload);
 }
 
-export function cancelAllForSession(sessionId: string): void {
-  for (const [id, entry] of pending) {
-    if (entry.sessionId !== sessionId) continue;
-    cleanup(id);
-    entry.resolve({ id, cancelled: true });
-  }
+/** Cancel every in-flight question for a window/socket that has gone away. */
+export function cancelAllForSession(sessionKey: string): void {
+  bridge.cancelSession(sessionKey);
 }

@@ -16,11 +16,8 @@ import {
   getFilesForCwd,
   invalidateFilesCache,
 } from "./MentionPicker";
-import {
-  SlashPicker,
-  filterSlashItems,
-  getSlashItemsForCwd,
-} from "./SlashPicker";
+import { SlashPicker, filterSlashItems } from "./SlashPicker";
+import { useClaudeCapabilities } from "@/hooks/useClaudeCapabilities";
 import {
   MentionEditor,
   segmentsAreEmpty,
@@ -91,9 +88,12 @@ export const NodePromptInput = forwardRef<NodePromptInputHandle, Props>(function
   const [trigger, setTrigger] = useState<EditorTrigger | null>(null);
   const [highlightIdx, setHighlightIdx] = useState(0);
   const [allEntries, setAllEntries] = useState<FileEntry[]>([]);
-  const [allSlashItems, setAllSlashItems] = useState<SlashItem[]>([]);
+  // The capability probe boots a CLI, so it waits for the first `/`.
+  const [slashRequested, setSlashRequested] = useState(false);
+  const { commands: allSlashItems } = useClaudeCapabilities(cwd, {
+    enabled: slashEnabled && slashRequested,
+  });
   const filesLoadedForCwdRef = useRef<string | null>(null);
-  const slashLoadedForCwdRef = useRef<string | null>(null);
 
   const mentionOpen = trigger?.kind === "mention";
   const slashOpen = trigger?.kind === "slash";
@@ -130,17 +130,6 @@ export const NodePromptInput = forwardRef<NodePromptInputHandle, Props>(function
       });
   };
 
-  const ensureSlashItemsLoaded = (): void => {
-    const key = cwd ?? "";
-    if (slashLoadedForCwdRef.current === key) return;
-    slashLoadedForCwdRef.current = key;
-    void getSlashItemsForCwd(key)
-      .then((items) => setAllSlashItems(items))
-      .catch(() => {
-        slashLoadedForCwdRef.current = null;
-      });
-  };
-
   const handleTriggerChange = (next: EditorTrigger | null): void => {
     // Slash commands and skills are a Claude-only feature: they're loaded from
     // ~/.claude/{commands,skills} and expanded by the agent SDK. For codex /
@@ -150,7 +139,7 @@ export const NodePromptInput = forwardRef<NodePromptInputHandle, Props>(function
       ensureFilesLoaded();
     }
     if (effective && effective.kind === "slash" && trigger?.kind !== "slash") {
-      ensureSlashItemsLoaded();
+      setSlashRequested(true);
     }
     setTrigger(effective);
     if (!effective) setHighlightIdx(0);

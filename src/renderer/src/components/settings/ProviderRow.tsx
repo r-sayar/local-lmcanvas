@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
-import { ArrowUpRight, Check, Loader2, Plug2, RotateCw } from "lucide-react";
+import { ArrowUpRight, Check, Copy, Loader2, Plug2, RotateCw } from "lucide-react";
+import { useState } from "react";
 import clsx from "clsx";
 import type { Provider } from "@shared/types";
 import { useProviderAuth } from "@/hooks/useProviderAuth";
@@ -12,12 +13,18 @@ type Props = {
   onMakeDefault: () => void;
 };
 
+const LOGIN_CMD: Partial<Record<Provider, string>> = {
+  claude: "claude auth login",
+};
+
 export function ProviderRow({ provider, isDefault, onMakeDefault }: Props) {
   const info = PROVIDER_INFO[provider];
   const auth = useProviderAuth(provider);
+  const [copied, setCopied] = useState(false);
 
   const authenticated = auth.status?.authenticated ?? false;
   const installed = auth.status?.installed ?? false;
+  const loginCmd = LOGIN_CMD[provider];
 
   const handleSignIn = async () => {
     try {
@@ -31,24 +38,27 @@ export function ProviderRow({ provider, isDefault, onMakeDefault }: Props) {
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      aria-pressed={isDefault}
-      title={info.tagline}
-      onClick={onMakeDefault}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onMakeDefault();
-        }
-      }}
       className={clsx(
-        "rounded-md border transition-colors cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-foreground/30",
+        "rounded-md border transition-colors outline-none",
         isDefault
           ? "border-foreground/40 bg-foreground/[0.06]"
-          : "border-border bg-background hover:bg-muted/40"
+          : "border-border bg-background"
       )}
     >
+      <div
+        role="button"
+        tabIndex={0}
+        aria-pressed={isDefault}
+        title={info.tagline}
+        onClick={onMakeDefault}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onMakeDefault();
+          }
+        }}
+        className="cursor-pointer hover:bg-muted/40 rounded-md focus-visible:ring-1 focus-visible:ring-foreground/30 outline-none"
+      >
       <div className="flex items-center gap-1.5 px-2 py-1.5">
         <ProviderLogo provider={provider} size={14} className="shrink-0" />
         <div className="min-w-0">
@@ -123,6 +133,35 @@ export function ProviderRow({ provider, isDefault, onMakeDefault }: Props) {
           )}
         </div>
       </div>
+      </div>
+      {installed && !authenticated && loginCmd && (
+        <div
+          className="flex items-center gap-1.5 border-t border-border/40 px-2 py-1.5"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <code className="flex-1 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground/70 select-all">
+            {loginCmd}
+          </code>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(loginCmd).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              });
+            }}
+            className="shrink-0 text-foreground/40 hover:text-foreground cursor-pointer transition-colors"
+            title="Copy command"
+          >
+            {copied ? (
+              <Check className="h-3 w-3 text-emerald-500" />
+            ) : (
+              <Copy className="h-3 w-3" />
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -2,8 +2,18 @@ import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import "xterm/css/xterm.css";
-import { X, TerminalSquare } from "lucide-react";
+import { X, TerminalSquare, Circle } from "lucide-react";
 import { useTerminalStore } from "@/hooks/useTerminalStore";
+
+// Strip ANSI escape codes so raw terminal bytes become plain text.
+// Written with explicit escapes: the equivalent literal ESC, CSI and BEL bytes
+// are invisible in an editor and do not survive a copy-paste, which makes the
+// pattern look broken when it isn't.
+const ANSI_RE =
+  /[\x1b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]|[\x1b\u009b][()][A-Z0-9]|\x1b[A-Z\\]|\x07|\r/g;
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_RE, "");
+}
 
 type Props = {
   canvasId: string;
@@ -13,8 +23,10 @@ type Props = {
 export function TerminalPanel({ canvasId, cwd }: Props) {
   const open = useTerminalStore((s) => s.open);
   const height = useTerminalStore((s) => s.height);
+  const capturing = useTerminalStore((s) => s.capturing);
   const setOpen = useTerminalStore((s) => s.setOpen);
   const setHeight = useTerminalStore((s) => s.setHeight);
+  const toggleCapture = useTerminalStore((s) => s.toggleCapture);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -63,6 +75,12 @@ export function TerminalPanel({ canvasId, cwd }: Props) {
     const unsubData = window.api.terminal.onData((id, data) => {
       if (id !== sessionId) return;
       term.write(data);
+      if (useTerminalStore.getState().capturing) {
+        const text = stripAnsi(data);
+        if (text) {
+          window.dispatchEvent(new CustomEvent("lmc:terminal-chunk", { detail: text }));
+        }
+      }
     });
 
     term.onData((data) => {
@@ -101,6 +119,14 @@ export function TerminalPanel({ canvasId, cwd }: Props) {
     window.addEventListener("mouseup", onUp);
   };
 
+  useEffect(() => {
+    if (capturing) {
+      window.dispatchEvent(new CustomEvent("lmc:terminal-capture-start"));
+    } else {
+      window.dispatchEvent(new CustomEvent("lmc:terminal-capture-end"));
+    }
+  }, [capturing]);
+
   if (!open) return null;
 
   return (
@@ -119,6 +145,13 @@ export function TerminalPanel({ canvasId, cwd }: Props) {
         <TerminalSquare size={13} className="text-foreground/50" />
         <span className="text-xs text-foreground/60 font-mono select-none">claude</span>
         <div className="flex-1" />
+        <button
+          onClick={toggleCapture}
+          className={`mr-1 cursor-pointer transition-colors ${capturing ? "text-red-400 hover:text-red-300" : "text-foreground/40 hover:text-foreground"}`}
+          title={capturing ? "stop streaming to canvas" : "stream output to canvas"}
+        >
+          <Circle size={11} className={capturing ? "fill-red-400" : ""} />
+        </button>
         <button
           onClick={() => setOpen(false)}
           className="text-foreground/40 hover:text-foreground cursor-pointer"

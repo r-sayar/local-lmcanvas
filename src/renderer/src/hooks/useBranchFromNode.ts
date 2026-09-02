@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useReactFlow, useStore } from "@xyflow/react";
+import { useReactFlow } from "@xyflow/react";
 import {
   FALLBACK_NODE_HEIGHT,
   NODE_WIDTH,
@@ -34,6 +34,9 @@ export type BranchOptions = {
    *  the store. Lets callers programmatically follow the child (e.g. select
    *  it so the right-side node drawer auto-switches to it). */
   onCreated?: (childId: string) => void;
+  /** Mark the new child as temporary — it will auto-delete 10s after its
+   *  assistant message completes unless the user hovers it. */
+  isTemporary?: boolean;
 };
 
 export type BranchFn = (opts?: BranchOptions) => void;
@@ -43,14 +46,17 @@ export function useBranchFromNode(parentId: string): BranchFn {
   const connectEdge = useCanvasStore((s) => s.connectEdge);
   const movePosition = useCanvasStore((s) => s.movePosition);
   const setPrefill = useCanvasStore((s) => s.setPrefill);
-  const parentNode = useCanvasStore((s) => s.nodes[parentId]);
   const storeApi = useCanvasStoreApi();
-  const zoom = useStore((s) => s.transform[2]);
-  const { screenToFlowPosition } = useReactFlow();
+  // Zoom and the parent node are read at call time, not subscribed: a
+  // subscription here re-renders every node (and every block inside it) on
+  // every zoom frame and every streamed token.
+  const { screenToFlowPosition, getZoom } = useReactFlow();
   const centerOnNode = useCenterOnNode();
 
   return useCallback(
     (opts) => {
+      const zoom = getZoom();
+      const parentNode = storeApi.getState().nodes[parentId];
       const {
         prefill,
         autoSubmit,
@@ -59,6 +65,7 @@ export function useBranchFromNode(parentId: string): BranchFn {
         addedContext,
         selectionViewportY,
         onCreated,
+        isTemporary,
       } = opts ?? {};
       const parentPos = parentNode?.position ?? { x: 0, y: 0 };
       const isRightLane = !placeBelow && (Boolean(prefill) || Boolean(addedContext));
@@ -88,6 +95,7 @@ export function useBranchFromNode(parentId: string): BranchFn {
         };
       }
       const child = makeBlankNode(position, parentId, addedContext);
+      if (isTemporary) child.data.chat.isTemporary = true;
       if (prefill) setPrefill(child.id, prefill, { autoSubmit });
       addNode(child);
       connectEdge(parentId, child.id, sourceYOffset != null ? { sourceYOffset } : undefined);
@@ -122,11 +130,10 @@ export function useBranchFromNode(parentId: string): BranchFn {
     },
     [
       parentId,
-      parentNode,
       addNode,
       connectEdge,
       setPrefill,
-      zoom,
+      getZoom,
       movePosition,
       centerOnNode,
       screenToFlowPosition,

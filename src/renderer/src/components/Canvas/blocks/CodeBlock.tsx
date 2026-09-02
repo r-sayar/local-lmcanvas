@@ -1,13 +1,14 @@
-import { memo, useState, type ComponentPropsWithoutRef } from "react";
+import { memo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 
 type Props = {
   code: string;
   language?: string;
   innerProps?: ComponentPropsWithoutRef<"code">;
+  children?: ReactNode;
 };
 
-export const CodeBlock = memo(function CodeBlock({ code, language, innerProps }: Props) {
+export const CodeBlock = memo(function CodeBlock({ code, language, innerProps, children }: Props) {
   const [copied, setCopied] = useState(false);
 
   const onCopy = async (): Promise<void> => {
@@ -41,7 +42,7 @@ export const CodeBlock = memo(function CodeBlock({ code, language, innerProps }:
           {...innerProps}
           className={`font-mono ${innerProps?.className ?? ""}`}
         >
-          {code}
+          {children ?? code}
         </code>
       </pre>
     </div>

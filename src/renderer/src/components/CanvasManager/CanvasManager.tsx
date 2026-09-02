@@ -3,12 +3,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import { PanelLeft, Plus, Settings } from "lucide-react";
 import type { Canvas, CanvasSummary } from "@shared/types";
 import { navigateToCanvas } from "@/lib/canvasNavigation";
-import { SettingsModal } from "@/components/SettingsModal";
 import { useFocusRequestStore } from "@/hooks/useFocusRequestStore";
 import { CanvasItem } from "./CanvasItem";
 import { CanvasSearch, type CanvasSearchRef } from "./CanvasSearch";
 import { DeleteCanvasModal } from "./DeleteCanvasModal";
-import { onOpenSettings } from "@/lib/openSettings";
+import { openSettings } from "@/lib/openSettings";
 
 type CanvasManagerProps = {
   /** Canvas id of the currently-open canvas, if any. */
@@ -29,12 +28,10 @@ export function CanvasManager({
   useEffect(() => {
     onOpenChange?.(isOpen);
   }, [isOpen, onOpenChange]);
-  useEffect(() => onOpenSettings(() => setShowSettings(true)), []);
   const [isLargeScreen, setIsLargeScreen] = useState(true);
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [showSettings, setShowSettings] = useState(false);
   const [deletingCanvasId, setDeletingCanvasId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -239,7 +236,7 @@ export function CanvasManager({
               {/* Footer */}
               <div className="p-2 border-t border-border">
                 <button
-                  onClick={() => setShowSettings(true)}
+                  onClick={() => openSettings()}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-md hover:bg-muted text-sm text-foreground cursor-pointer"
                 >
                   <Settings className="h-4 w-4" />
@@ -251,7 +248,6 @@ export function CanvasManager({
         )}
       </AnimatePresence>
 
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
 
       <DeleteCanvasModal
         isOpen={pendingDelete !== null}
