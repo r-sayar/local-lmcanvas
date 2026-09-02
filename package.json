@@ -23,7 +23,8 @@
     "typecheck": "bun run typecheck:node && bun run typecheck:web",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder --publish never",
-    "e2e:parity": "tsx --tsconfig tsconfig.node.json scripts/e2e-parity.ts"
+    "e2e:parity": "tsx --tsconfig tsconfig.node.json scripts/e2e-parity.ts",
+    "e2e:permissions": "tsx --tsconfig tsconfig.node.json scripts/e2e-permissions.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.141",

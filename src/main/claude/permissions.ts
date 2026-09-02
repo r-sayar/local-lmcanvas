@@ -99,9 +99,19 @@ export function cancelPermissionsForSession(sessionKey: string): void {
   bridge.cancelSession(sessionKey);
 }
 
-/** True when an existing always-allow rule already covers this call. */
-function matchingRule(toolName: string, input: Record<string, unknown>): string | undefined {
-  for (const rule of alwaysAllowed) {
+/**
+ * The rule that pre-approves this call, if any.
+ *
+ * Exported so the matching can be checked directly: the live allow-list is
+ * reloaded from settings at the start of every run, so exercising this through
+ * a real turn would mean writing to the user's settings file.
+ */
+export function matchingRule(
+  toolName: string,
+  input: Record<string, unknown>,
+  rules: string[] = alwaysAllowed,
+): string | undefined {
+  for (const rule of rules) {
     const open = rule.indexOf("(");
     if (open === -1) {
       if (rule === toolName) return rule;
@@ -152,7 +162,7 @@ function primaryInput(toolName: string, input: Record<string, unknown>): string 
  * The rule offered behind "always allow". For Bash we narrow to the first token
  * so approving `git status` doesn't silently approve `rm -rf`.
  */
-function suggestRule(toolName: string, input: Record<string, unknown>): string {
+export function suggestRule(toolName: string, input: Record<string, unknown>): string {
   if (toolName !== "Bash") return toolName;
   const command = primaryInput(toolName, input);
   if (!command) return toolName;
