@@ -20,7 +20,7 @@
     "preview": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "bun run typecheck:node && bun run typecheck:web",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder --publish never"
   },

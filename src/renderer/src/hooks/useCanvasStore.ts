@@ -13,11 +13,14 @@ import type {
   NodeId,
   NodeSettings,
   Provider,
+  SubagentBlock,
   Suggestion,
   TextBlock,
+  TodoItem,
   ToolUseBlock,
   UsageSummary,
 } from "@shared/types";
+import { hasNodeSettings } from "@shared/types";
 import {
   getMessageHistoryForNode,
   messageTextForTitle,
@@ -45,6 +48,8 @@ export type CanvasStoreState = {
   saving: boolean;
   error: string | null;
   pendingPrefills: Record<NodeId, PendingPrefill>;
+  /** Live TodoWrite state per node. Not serialized — it's rebuilt from each run. */
+  todos: Record<NodeId, TodoItem[]>;
   searchHighlights: Map<NodeId, Set<string>>;
   setSearchHighlights: (nodeId: NodeId, textMatches: string[]) => void;
   clearSearchHighlights: () => void;
@@ -89,8 +94,35 @@ export type CanvasStoreState = {
     messageId: string,
     toolUseId: string,
     content: string,
-    isError: boolean
+    isError: boolean,
+    /** Present when the call was made inside a subagent's Task block. */
+    parentToolUseId?: string
   ) => void;
+  /** Remember the CLI session for this node so the next turn resumes it. */
+  setNodeSessionId: (nodeId: NodeId, sessionId: string) => void;
+  appendSubagentDelta: (
+    nodeId: NodeId,
+    messageId: string,
+    parentToolUseId: string,
+    kind: "text" | "thinking",
+    text: string
+  ) => void;
+  appendSubagentBlock: (
+    nodeId: NodeId,
+    messageId: string,
+    parentToolUseId: string,
+    block: ToolUseBlock
+  ) => void;
+  setSubagentSummary: (
+    nodeId: NodeId,
+    messageId: string,
+    parentToolUseId: string,
+    summary: string
+  ) => void;
+  /** Latest TodoWrite state per node. Live-only; not persisted with the canvas. */
+  setTodos: (nodeId: NodeId, todos: TodoItem[]) => void;
+  /** Append one suggestion without clobbering parsed `<next-steps>` items. */
+  addSuggestion: (nodeId: NodeId, messageId: string, suggestion: Suggestion) => void;
   setMessageUsage: (nodeId: NodeId, messageId: string, usage?: UsageSummary) => void;
   finalizeMessage: (nodeId: NodeId, messageId: string) => void;
   errorMessage: (
@@ -170,6 +202,37 @@ function mapMessage(
   return changed ? next : messages;
 }
 
+/**
+ * Apply an update to the subagent block for `parentToolUseId`, creating it if
+ * this is the first thing the subagent has produced.
+ *
+ * The block is inserted directly after its own `Task` tool call so the nested
+ * transcript reads in place rather than at the end of the message.
+ */
+function withSubagent(
+  message: Message,
+  parentToolUseId: string,
+  fn: (sub: SubagentBlock) => SubagentBlock
+): Message {
+  const index = message.blocks.findIndex(
+    (b) => b.type === "subagent" && b.parentToolUseId === parentToolUseId
+  );
+
+  if (index !== -1) {
+    const blocks = [...message.blocks];
+    blocks[index] = fn(blocks[index] as SubagentBlock);
+    return { ...message, blocks };
+  }
+
+  const created = fn({ type: "subagent", parentToolUseId, blocks: [] });
+  const taskIndex = message.blocks.findIndex(
+    (b) => b.type === "tool_use" && b.id === parentToolUseId
+  );
+  const blocks = [...message.blocks];
+  blocks.splice(taskIndex === -1 ? blocks.length : taskIndex + 1, 0, created);
+  return { ...message, blocks };
+}
+
 function firstUserPrompt(nodes: CanvasNode[]): string | null {
   for (const node of nodes) {
     const message = node.data.chat.messages.find((m) => m.role === "user");
@@ -196,6 +259,7 @@ export function createCanvasStoreApi(): CanvasStoreApi {
       saving: false,
       error: null,
       pendingPrefills: {},
+      todos: {},
       searchHighlights: new Map(),
       merging: false,
       mergeIds: [],
@@ -377,12 +441,10 @@ export function createCanvasStoreApi(): CanvasStoreApi {
             if (value === undefined) delete merged[key];
             else (merged as Record<string, unknown>)[key] = value;
           }
-          const hasAny =
-            merged.provider !== undefined ||
-            merged.model !== undefined ||
-            merged.cwd !== undefined ||
-            merged.branch !== undefined ||
-            merged.planMode !== undefined;
+          // Checked against every declared key. The old hand-written list
+          // omitted `chatOnly`, so toggling Fast on a node with no other
+          // override produced settings that were immediately discarded below.
+          const hasAny = hasNodeSettings(merged);
           const nextData = { ...existing.data };
           if (hasAny) nextData.nodeSettings = merged;
           else delete nextData.nodeSettings;
@@ -403,10 +465,10 @@ export function createCanvasStoreApi(): CanvasStoreApi {
           if (!current || current[field] === undefined) return s;
           const next: NodeSettings = { ...current };
           delete next[field];
-          const hasAny =
-            next.provider !== undefined ||
-            next.cwd !== undefined ||
-            next.branch !== undefined;
+          // Previously checked only provider/cwd/branch, so clearing one field
+          // on a node whose remaining overrides were model/planMode/chatOnly
+          // deleted those too.
+          const hasAny = hasNodeSettings(next);
           const nextData = { ...existing.data };
           if (hasAny) nextData.nodeSettings = next;
           else delete nextData.nodeSettings;
@@ -444,7 +506,8 @@ export function createCanvasStoreApi(): CanvasStoreApi {
               : undefined;
             const inherited =
               parentSettings ?? useRecentsStore.getState().lastNodeSettings;
-            if (inherited && (inherited.provider || inherited.cwd || inherited.branch)) {
+            // A parent whose only override was `model` used to pass nothing down.
+            if (hasNodeSettings(inherited)) {
               nextNode = {
                 ...node,
                 data: { ...node.data, nodeSettings: { ...inherited } },
@@ -682,12 +745,26 @@ export function createCanvasStoreApi(): CanvasStoreApi {
         get().markDirty();
       },
 
-      setToolResult: (nodeId, messageId, toolUseId, content, isError) => {
+      setToolResult: (nodeId, messageId, toolUseId, content, isError, parentToolUseId) => {
         set((s) => {
           const nodes = updateMessages(s.nodes, nodeId, (messages) =>
             mapMessage(messages, messageId, (m) => {
               let touched = false;
               const blocks = m.blocks.map((b) => {
+                // A subagent's result lands on the tool call inside its Task
+                // block, not on a same-id block in the main transcript.
+                if (parentToolUseId && b.type === "subagent") {
+                  if (b.parentToolUseId !== parentToolUseId) return b;
+                  let inner = false;
+                  const nested = b.blocks.map((nb) => {
+                    if (nb.type !== "tool_use" || nb.id !== toolUseId) return nb;
+                    inner = true;
+                    return { ...nb, result: { content, isError } } satisfies ToolUseBlock;
+                  });
+                  if (!inner) return b;
+                  touched = true;
+                  return { ...b, blocks: nested };
+                }
                 if (b.type !== "tool_use") return b;
                 const tu = b as ToolUseBlock;
                 if (tu.id !== toolUseId) return b;
@@ -695,6 +772,97 @@ export function createCanvasStoreApi(): CanvasStoreApi {
                 return { ...tu, result: { content, isError } } satisfies ToolUseBlock;
               });
               return touched ? { ...m, blocks } : m;
+            })
+          );
+          return nodes ? { nodes } : s;
+        });
+        get().markDirty();
+      },
+
+      /**
+       * Record the CLI session backing this node so the next turn resumes it
+       * instead of replaying the whole transcript as text.
+       */
+      setNodeSessionId: (nodeId, sessionId) => {
+        set((s) => {
+          const n = s.nodes[nodeId];
+          if (!n || n.data.chat.sessionId === sessionId) return s;
+          return {
+            nodes: {
+              ...s.nodes,
+              [nodeId]: {
+                ...n,
+                data: { ...n.data, chat: { ...n.data.chat, sessionId } },
+              },
+            },
+          };
+        });
+        get().markDirty();
+      },
+
+      appendSubagentDelta: (nodeId, messageId, parentToolUseId, kind, text) => {
+        if (!text) return;
+        set((s) => {
+          const nodes = updateMessages(s.nodes, nodeId, (messages) =>
+            mapMessage(messages, messageId, (m) =>
+              withSubagent(m, parentToolUseId, (sub) => {
+                const blocks = [...sub.blocks];
+                const last = blocks[blocks.length - 1];
+                const wanted = kind === "text" ? "text" : "thinking";
+                if (last && last.type === wanted) {
+                  blocks[blocks.length - 1] = { ...last, text: last.text + text };
+                } else if (wanted === "text") {
+                  blocks.push({ type: "text", text });
+                } else {
+                  blocks.push({ type: "thinking", text });
+                }
+                return { ...sub, blocks };
+              })
+            )
+          );
+          return nodes ? { nodes } : s;
+        });
+        get().markDirty();
+      },
+
+      appendSubagentBlock: (nodeId, messageId, parentToolUseId, block) => {
+        set((s) => {
+          const nodes = updateMessages(s.nodes, nodeId, (messages) =>
+            mapMessage(messages, messageId, (m) =>
+              withSubagent(m, parentToolUseId, (sub) => ({
+                ...sub,
+                blocks: [...sub.blocks, block],
+              }))
+            )
+          );
+          return nodes ? { nodes } : s;
+        });
+        get().markDirty();
+      },
+
+      setSubagentSummary: (nodeId, messageId, parentToolUseId, summary) => {
+        set((s) => {
+          const nodes = updateMessages(s.nodes, nodeId, (messages) =>
+            mapMessage(messages, messageId, (m) =>
+              withSubagent(m, parentToolUseId, (sub) => ({ ...sub, summary }))
+            )
+          );
+          return nodes ? { nodes } : s;
+        });
+        get().markDirty();
+      },
+
+      setTodos: (nodeId, todos) => {
+        set((s) => ({ todos: { ...s.todos, [nodeId]: todos } }));
+      },
+
+      addSuggestion: (nodeId, messageId, suggestion) => {
+        set((s) => {
+          const nodes = updateMessages(s.nodes, nodeId, (messages) =>
+            mapMessage(messages, messageId, (m) => {
+              const existing = m.suggestions ?? [];
+              if (existing.some((x) => x.prompt === suggestion.prompt)) return m;
+              return { ...m, suggestions: [...existing, suggestion] };
             })
           );
           return nodes ? { nodes } : s;

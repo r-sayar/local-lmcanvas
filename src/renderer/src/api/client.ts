@@ -112,11 +112,43 @@ export function initApi(): void {
         wsSend({ type: "chat:cancel", data: { chatId } });
         return Promise.resolve();
       },
+      interrupt: (chatId) => {
+        wsSend({ type: "chat:interrupt", data: { chatId } });
+        return Promise.resolve();
+      },
       cancelForNode: (nodeId) => {
         wsSend({ type: "chat:cancelForNode", data: { nodeId } });
         return Promise.resolve();
       },
+      setPermissionMode: (chatId, mode) => {
+        wsSend({ type: "chat:setPermissionMode", data: { chatId, mode } });
+        return Promise.resolve();
+      },
+      setModel: (chatId, model) => {
+        wsSend({ type: "chat:setModel", data: { chatId, model } });
+        return Promise.resolve();
+      },
+      // Control requests that need an answer don't fit the fire-and-forget
+      // socket, so they go over HTTP where a response is natural.
+      backgroundTasks: (chatId, toolUseId) =>
+        post<boolean>("/chat/background-tasks", { chatId, toolUseId }),
+      contextUsage: (chatId) => post("/chat/context-usage", { chatId }),
       onEvent: (handler) => wsOn("chat:event", handler as WsHandler),
+    },
+
+    permissions: {
+      onRequest: (handler) => wsOn("permission:request", handler as WsHandler),
+      respond: (decision) => {
+        wsSend({ type: "permission:respond", data: decision });
+        return Promise.resolve();
+      },
+    },
+
+    claude: {
+      capabilities: (cwd, refresh) =>
+        post("/claude/capabilities", { cwd, refresh }),
+      rewind: (chatId, userMessageId, dryRun) =>
+        post("/claude/rewind", { chatId, userMessageId, dryRun }),
     },
 
     dialog: {

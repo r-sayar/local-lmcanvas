@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { AppSettings, NodeSettings, Provider } from "@shared/types";
-import { PROVIDERS } from "@shared/types";
+import { PROVIDERS, NODE_SETTINGS_KEYS, hasNodeSettings } from "@shared/types";
 import { SETTINGS_FILE, atomicWriteFile, ensureDirs } from "./paths";
 
 const MAX_RECENTS = 8;
@@ -19,6 +19,18 @@ const DEFAULTS: AppSettings = {
   terseToolNarration: false,
   recentFolders: [],
   recentBranches: [],
+  // Matches the CLI's own default set. Explicitly listed so a future SDK change
+  // to the implicit default can't silently drop CLAUDE.md discovery.
+  settingSources: ["user", "project", "local"],
+  // Edits are the point of a canvas session; genuinely destructive calls still
+  // route through the approval prompt.
+  defaultPermissionMode: "acceptEdits",
+  forwardSubagentText: true,
+  agentProgressSummaries: true,
+  showHookEvents: false,
+  checkpointing: false,
+  alwaysAllowedTools: [],
+  maxStoredToolResultChars: 20_000,
 };
 
 function sanitizeRecents(values: unknown): string[] {
@@ -36,16 +48,27 @@ function sanitizeRecents(values: unknown): string[] {
   return out;
 }
 
+/**
+ * Keep every declared override, dropping only unknown keys and empty strings.
+ *
+ * This used to hand-check `provider | cwd | branch` and silently discard
+ * everything else, so a model override — the most common one — never survived a
+ * round trip and never seeded a new node.
+ */
 function sanitizeNodeSettings(raw: unknown): NodeSettings | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const obj = raw as Record<string, unknown>;
   const out: NodeSettings = {};
-  if (typeof obj.provider === "string" && (PROVIDERS as readonly string[]).includes(obj.provider)) {
-    out.provider = obj.provider as Provider;
+
+  for (const key of NODE_SETTINGS_KEYS) {
+    const value = obj[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.length === 0) continue;
+    if (key === "provider" && !(PROVIDERS as readonly string[]).includes(value as string)) continue;
+    Object.assign(out, { [key]: value as NodeSettings[typeof key] });
   }
-  if (typeof obj.cwd === "string" && obj.cwd.length > 0) out.cwd = obj.cwd;
-  if (typeof obj.branch === "string" && obj.branch.length > 0) out.branch = obj.branch;
-  return out.provider || out.cwd || out.branch ? out : undefined;
+
+  return hasNodeSettings(out) ? out : undefined;
 }
 
 function mergeWithDefaults(s: Partial<AppSettings>): AppSettings {

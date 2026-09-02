@@ -15,6 +15,7 @@ import type { Attachment, ChatEvent } from "@shared/ipc";
 import { buildMergeContext } from "@shared/history";
 import { isUnnamedCanvasName, promptToCanvasName } from "@shared/canvasName";
 import { createNextStepsStreamer } from "@/lib/nextStepsParser";
+import { parseInlineCommands } from "@/lib/inlineCommands";
 
 export function useNodeChat(nodeId: NodeId) {
   const storeApi = useCanvasStoreApi();
@@ -174,11 +175,53 @@ export function useNodeChat(nodeId: NodeId) {
               name: ev.name,
               input: ev.input,
             };
-            s.appendBlock(nodeId, asstMsgId, block);
+            // A subagent's own tool calls belong inside its Task block, not
+            // interleaved with the main thread's.
+            if (ev.parentToolUseId) {
+              s.appendSubagentBlock(nodeId, asstMsgId, ev.parentToolUseId, block);
+            } else {
+              s.appendBlock(nodeId, asstMsgId, block);
+            }
             return;
           }
           case "tool_result":
-            s.setToolResult(nodeId, asstMsgId, ev.toolUseId, ev.content, ev.isError);
+            s.setToolResult(
+              nodeId,
+              asstMsgId,
+              ev.toolUseId,
+              ev.content,
+              ev.isError,
+              ev.parentToolUseId,
+            );
+            return;
+          case "session":
+            s.setNodeSessionId(nodeId, ev.sessionId);
+            return;
+          case "subagent_delta":
+            s.appendSubagentDelta(
+              nodeId,
+              asstMsgId,
+              ev.parentToolUseId,
+              ev.kind,
+              ev.text,
+            );
+            return;
+          case "subagent_progress":
+            s.setSubagentSummary(nodeId, asstMsgId, ev.parentToolUseId, ev.summary);
+            return;
+          case "todos":
+            s.setTodos(nodeId, ev.todos);
+            return;
+          case "prompt_suggestion":
+            s.addSuggestion(nodeId, asstMsgId, {
+              label: "Continue",
+              prompt: ev.prompt,
+            });
+            return;
+          // Informational only — surfaced in the timeline, not the transcript.
+          case "hook":
+          case "task_notification":
+          case "compact":
             return;
           case "done":
             if (ev.usage) {
@@ -204,46 +247,39 @@ export function useNodeChat(nodeId: NodeId) {
         }
       });
 
-      // One-shot plan mode: a leading `/plan` (followed by space or end) flips
-      // the SDK into plan mode for this run only. The prefix is stripped from
-      // what the model sees but kept verbatim in the user message bubble for
-      // provenance.
-      const inlinePlanMatch = trimmed.match(/^\/plan(?:\s+|$)/);
-      const inlinePlanMode = Boolean(inlinePlanMatch);
-      const afterPlanStrip = inlinePlanMatch
-        ? trimmed.slice(inlinePlanMatch[0].length)
-        : trimmed;
-
-      // One-shot chat-only mode: leading `/chat` drops the claude_code preset
-      // for this run so the model responds with chat-grade latency.
-      const inlineChatMatch = afterPlanStrip.match(/^\/chat(?:\s+|$)/);
-      const inlineChatOnly = Boolean(inlineChatMatch);
-      const promptAfterPlanStrip = inlineChatMatch
-        ? afterPlanStrip.slice(inlineChatMatch[0].length)
-        : afterPlanStrip;
+      // Leading `/plan`, `/chat`, `/accept-edits`, `/ask` are interpreted here
+      // and stripped from what the model sees. Everything else stays in the
+      // prompt so the CLI expands it as a real slash command.
+      const inline = parseInlineCommands(trimmed);
 
       const addedContext =
         storeApi.getState().nodes[nodeId]?.data.chat.addedContext;
       let promptForModel = addedContext
-        ? `> ${addedContext.replace(/\n/g, "\n> ")}\n\n${promptAfterPlanStrip}`
-        : promptAfterPlanStrip;
+        ? `> ${addedContext.replace(/\n/g, "\n> ")}\n\n${inline.prompt}`
+        : inline.prompt;
       if (mergeContext) {
         promptForModel = `${mergeContext}\n\n---\n\n${promptForModel}`;
       }
 
-      const nodeSettings = storeApi.getState().nodes[nodeId]?.data.nodeSettings;
+      const latest = storeApi.getState();
+      const nodeSettings = latest.nodes[nodeId]?.data.nodeSettings;
+      const resume = resolveResumeTarget(latest, nodeId);
 
       try {
         await window.api.chat.start({
           chatId,
           nodeId,
           canvasId,
-          history,
+          // Only needed when there is no session to resume; main ignores it
+          // otherwise rather than replaying the transcript as text.
+          history: resume ? [] : history,
           prompt: promptForModel,
           attachments: attachments.length > 0 ? attachments : undefined,
           nodeSettings,
-          planMode: inlinePlanMode || undefined,
-          chatOnly: inlineChatOnly || undefined,
+          permissionMode: inline.permissionMode,
+          chatOnly: inline.chatOnly || undefined,
+          resumeSessionId: resume?.sessionId,
+          forkSession: resume?.fork || undefined,
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -254,10 +290,41 @@ export function useNodeChat(nodeId: NodeId) {
     [nodeId, storeApi]
   );
 
+  /**
+   * Graceful stop. `interrupt` lets the CLI finish the turn cleanly so the
+   * partial answer stays readable and the session can still be resumed; main
+   * falls back to killing the process when there is no live session.
+   */
   const stop = useCallback(() => {
     const id = activeChatIdRef.current;
-    if (id) void window.api.chat.cancel(id);
+    if (id) void window.api.chat.interrupt(id);
   }, []);
 
   return { submit, stop, streaming };
+}
+
+/**
+ * Which CLI session this turn should continue.
+ *
+ * A node that has already run owns a session and simply extends it. A fresh
+ * child inherits its parent's session as a *fork*, which is exactly what
+ * branching a canvas means: same history up to this point, diverging after.
+ */
+function resolveResumeTarget(
+  state: { nodes: Record<NodeId, CanvasNode> },
+  nodeId: NodeId,
+): { sessionId: string; fork: boolean } | null {
+  const node = state.nodes[nodeId];
+  if (!node) return null;
+
+  const own = node.data.chat.sessionId;
+  if (own) return { sessionId: own, fork: false };
+
+  // Merge nodes have several parents and no single history to fork from, so
+  // they start fresh with the merge context in the prompt.
+  const parentIds = node.data.chat.parentIds;
+  if (parentIds.length !== 1) return null;
+
+  const parentSession = state.nodes[parentIds[0]]?.data.chat.sessionId;
+  return parentSession ? { sessionId: parentSession, fork: true } : null;
 }

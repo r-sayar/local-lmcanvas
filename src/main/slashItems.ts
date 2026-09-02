@@ -6,7 +6,14 @@ import type { SlashItem, SlashItemSource } from "@shared/ipc";
 const COMMANDS_DIR = ".claude/commands";
 const SKILLS_DIR = ".claude/skills";
 
-/** Slash commands the app handles itself instead of forwarding to the SDK. */
+/**
+ * Slash commands the app handles itself instead of forwarding to the CLI.
+ *
+ * `clientSide` marks them so the prompt input strips them and flips a flag
+ * rather than sending the literal text — otherwise the model just sees `/plan`.
+ * `/chat` was previously handled in the renderer but missing from this list, so
+ * the picker never offered it.
+ */
 const BUILTIN_ITEMS: SlashItem[] = [
   {
     kind: "command",
@@ -14,8 +21,52 @@ const BUILTIN_ITEMS: SlashItem[] = [
     description:
       "Run this turn in plan mode — Claude proposes a plan but can't use mutating tools.",
     source: "builtin",
+    clientSide: true,
+  },
+  {
+    kind: "command",
+    name: "chat",
+    description:
+      "Run this turn as plain chat — skips the agent preset and disables tools for a fast reply.",
+    source: "builtin",
+    clientSide: true,
+  },
+  {
+    kind: "command",
+    name: "accept-edits",
+    description: "Run this turn with file edits auto-accepted, prompting only for other tools.",
+    source: "builtin",
+    clientSide: true,
+  },
+  {
+    kind: "command",
+    name: "ask",
+    description: "Run this turn asking permission before every tool call.",
+    source: "builtin",
+    clientSide: true,
   },
 ];
+
+/**
+ * Union of what the CLI reports and what we find on disk.
+ *
+ * The CLI knows its own built-ins, plugins and skills; the disk scan picks up
+ * project command files and carries our client-side entries. Neither alone is
+ * complete. CLI entries win on collision — they carry argument hints and reflect
+ * what will actually run.
+ */
+export function mergeSlashItems(fromCli: SlashItem[], fromDisk: SlashItem[]): SlashItem[] {
+  const merged = new Map<string, SlashItem>();
+  for (const item of fromDisk) merged.set(`${item.kind}:${item.name}`, item);
+  for (const item of fromCli) {
+    const key = `${item.kind}:${item.name}`;
+    const existing = merged.get(key);
+    // Never let a CLI entry mask a client-side one — /plan must stay local.
+    if (existing?.clientSide) continue;
+    merged.set(key, item);
+  }
+  return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
 
 export async function listSlashItems(cwd: string): Promise<SlashItem[]> {
   const home = homedir();

@@ -14,14 +14,29 @@ import {
   deleteCanvas,
 } from "../src/main/storage/canvases";
 import { readSettings, writeSettings } from "../src/main/storage/settings";
-import { buildPromptWithHistory } from "../src/main/claude/history";
-import { runAgent } from "../src/main/agents";
-import { runClaudeViaConsole } from "../src/main/claude/consoleRunner";
+import {
+  startChatRun,
+  abortChat,
+  abortChatsForNode,
+  abortChatsForSession,
+} from "../src/main/chatRun";
 import { generateGroupSummaries } from "../src/main/groupSummary/generate";
 import { generateCanvasName } from "../src/main/canvasName/generate";
 import { getProviderAuthStatus, openLoginTerminal } from "../src/main/auth/providerAuth";
 import { listFiles } from "../src/main/files";
-import { listSlashItems } from "../src/main/slashItems";
+import { listSlashItems, mergeSlashItems } from "../src/main/slashItems";
+import { getCapabilities } from "../src/main/claude/capabilities";
+import { respondToPermission, cancelPermissionsForSession } from "../src/main/claude/permissions";
+import {
+  interruptRun,
+  setRunPermissionMode,
+  setRunModel,
+  backgroundRunTasks,
+  getRunContextUsage,
+  rewindRunFiles,
+  runIdsForNode,
+} from "../src/main/claude/sessions";
+import { resolveClaudeExecutable } from "../src/main/claude/binary";
 import { startPersistentProcess, stopPersistentProcess } from "../src/main/processes";
 import { completeRequest, cancelAllForSession } from "../src/main/claude/askUserBridge";
 import { createPty, writePty, resizePty, killPty } from "../src/main/terminal/pty";
@@ -29,26 +44,15 @@ import type {
   ChatStartArgs,
   CanvasCreateArgs,
   AskUserResponsePayload,
+  PermissionDecision,
   TerminalCreateArgs,
   GenerateGroupSummaryRequest,
   GenerateCanvasNameRequest,
   PersistentProcessStartArgs,
 } from "../src/shared/ipc";
-import type { Canvas, Provider } from "../src/shared/types";
-import { execSync } from "node:child_process";
+import type { Canvas, PermissionMode, Provider } from "../src/shared/types";
 
 const PORT = Number(process.env.PORT ?? 3001);
-
-// ── Resolve system claude bin ────────────────────────────────────────────────
-
-function resolveSystemClaude(): string | undefined {
-  const cmd = process.platform === "win32" ? "where claude" : "which claude";
-  try {
-    return execSync(cmd, { encoding: "utf8" }).trim().split("\n")[0] || undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 // ── Session map: sessionId → WebSocket ──────────────────────────────────────
 
@@ -120,6 +124,36 @@ app.get("/api/files", async (req, res) => {
 app.get("/api/slash", async (req, res) => {
   const cwd = String(req.query.cwd ?? homedir());
   res.json(await listSlashItems(cwd));
+});
+
+// ── Claude capabilities & live-run control ───────────────────────────────────
+
+app.post("/api/claude/capabilities", async (req, res) => {
+  const { cwd, refresh } = req.body as { cwd?: string; refresh?: boolean };
+  const settings = await readSettings();
+  const binPath = settings.providers?.claude?.binPath ?? settings.claudeBinPath;
+  const caps = await getCapabilities(cwd ?? "", binPath, refresh === true);
+  const onDisk = await listSlashItems(cwd ?? "");
+  res.json({ ...caps, commands: mergeSlashItems(caps.commands, onDisk) });
+});
+
+app.post("/api/claude/rewind", async (req, res) => {
+  const { chatId, userMessageId, dryRun } = req.body as {
+    chatId: string;
+    userMessageId: string;
+    dryRun?: boolean;
+  };
+  res.json(await rewindRunFiles(chatId, userMessageId, dryRun));
+});
+
+app.post("/api/chat/context-usage", async (req, res) => {
+  const { chatId } = req.body as { chatId: string };
+  res.json(await getRunContextUsage(chatId));
+});
+
+app.post("/api/chat/background-tasks", async (req, res) => {
+  const { chatId, toolUseId } = req.body as { chatId: string; toolUseId?: string };
+  res.json(await backgroundRunTasks(chatId, toolUseId));
 });
 
 // ── Providers ─────────────────────────────────────────────────────────────────
@@ -254,111 +288,48 @@ async function handleWsMessage(
   switch (type) {
     case "chat:start": {
       const args = data as ChatStartArgs;
-      const { chatId, nodeId, canvasId } = args;
-
-      const canvas = await readCanvas(canvasId);
-      const settings = await readSettings();
-
-      const provider: Provider =
-        args.nodeSettings?.provider ??
-        canvas?.provider ??
-        settings.defaultProvider ??
-        "claude";
-
-      const effectiveCwd =
-        args.nodeSettings?.cwd ?? canvas?.cwd ?? homedir();
-
-      const providerCfg = settings.providers?.[provider];
-      const configuredBin =
-        providerCfg?.binPath ??
-        (provider === "claude" ? settings.claudeBinPath : undefined);
-      const binPath = configuredBin || resolveSystemClaude() || undefined;
-
-      const model = providerCfg?.model ?? settings.claudeModel ?? undefined;
-
-      const TERSE =
-        "RESPONSE STYLE: Before each batch of tool calls, write ONE very short action-form label as a single line — 3 to 8 words, gerund form. Examples: 'Reading the canvas store', 'Searching for tool handlers'. NEVER start with a reaction word like 'Good', 'Great', 'Perfect'. NEVER use first-person prefixes like 'I'll', 'Let me'.";
-
-      const systemParts = [settings.systemPrompt, settings.terseToolNarration ? TERSE : ""]
-        .filter(Boolean);
-      const systemPrompt = args.systemPromptOverride ?? systemParts.join("\n\n");
-
-      const controller = new AbortController();
-      activeChats.set(chatId, { controller, nodeId, sessionId });
-
-      const combinedPrompt = buildPromptWithHistory(args.history, args.prompt, args.attachments);
-
-      send({ type: "chat:event", data: { chatId, type: "start" } });
-
-      const onEvent: Parameters<typeof runClaudeViaConsole>[1]["onEvent"] = (ev) => {
-        const chatEvent = (() => {
-          switch (ev.kind) {
-            case "text_delta": return { chatId, type: "text_delta", text: ev.text };
-            case "thinking_delta": return { chatId, type: "thinking_delta", text: ev.text };
-            case "tool_use": return { chatId, type: "tool_use", toolUseId: ev.toolUseId, name: ev.name, input: ev.input };
-            case "tool_result": return { chatId, type: "tool_result", toolUseId: ev.toolUseId, content: ev.content, isError: ev.isError };
-            case "done": return { chatId, type: "done", isError: ev.isError, result: ev.result, code: ev.code, provider, usage: ev.usage };
-            case "error": return { chatId, type: "error", message: ev.message, code: ev.code, provider };
-            default: return null;
-          }
-        })();
-        if (chatEvent) send({ type: "chat:event", data: chatEvent });
-      };
-
-      try {
-        if (provider === "claude") {
-          const resolvedBin = binPath ?? resolveSystemClaude() ?? "claude";
-          const nodeModel = args.nodeSettings?.model ?? model ?? undefined;
-          await runClaudeViaConsole(combinedPrompt, {
-            cwd: effectiveCwd,
-            binPath: resolvedBin,
-            model: nodeModel,
-            signal: controller.signal,
-            onEvent,
-            onTerminalData: (chunk) => {
-              send({ type: "terminal:data", data: { id: `terminal:${canvasId}`, data: chunk } });
-            },
-          });
-        } else {
-          await runAgent(provider, combinedPrompt, {
-            cwd: effectiveCwd,
-            model,
-            binPath,
-            systemPrompt,
-            attachments: args.attachments,
-            signal: controller.signal,
-            planMode: args.planMode || args.nodeSettings?.planMode,
-            sessionId,
-            nodeId,
-            sendToClient: (msg) => send({ type: "chat:event", data: msg }),
-            onEvent,
-          });
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        send({ type: "chat:event", data: { chatId, type: "error", message, provider } });
-        send({ type: "chat:event", data: { chatId, type: "done", isError: true, provider } });
-      } finally {
-        activeChats.delete(chatId);
-      }
+      await startChatRun(args, {
+        sessionKey: sessionId,
+        sendChatEvent: (ev) => send({ type: "chat:event", data: ev }),
+        // Ask-user and permission requests already carry their own envelope
+        // type, so they can go straight down the same socket.
+        sendToClient: (msg) => send(msg),
+      });
       break;
     }
 
+
     case "chat:cancel": {
       const { chatId } = data as { chatId: string };
-      activeChats.get(chatId)?.controller.abort();
-      activeChats.delete(chatId);
+      abortChat(chatId);
       cancelAllForSession(sessionId);
+      cancelPermissionsForSession(sessionId);
+      break;
+    }
+
+    case "chat:interrupt": {
+      const { chatId } = data as { chatId: string };
+      const interrupted = await interruptRun(chatId);
+      if (!interrupted) abortChat(chatId);
       break;
     }
 
     case "chat:cancelForNode": {
       const { nodeId } = data as { nodeId: string };
-      for (const [chatId, entry] of activeChats) {
-        if (entry.nodeId !== nodeId || entry.sessionId !== sessionId) continue;
-        entry.controller.abort();
-        activeChats.delete(chatId);
-      }
+      abortChatsForNode(nodeId);
+      for (const chatId of runIdsForNode(nodeId)) abortChat(chatId);
+      break;
+    }
+
+    case "chat:setPermissionMode": {
+      const { chatId, mode } = data as { chatId: string; mode: PermissionMode };
+      await setRunPermissionMode(chatId, mode);
+      break;
+    }
+
+    case "chat:setModel": {
+      const { chatId, model } = data as { chatId: string; model?: string };
+      await setRunModel(chatId, model);
       break;
     }
 
@@ -367,11 +338,16 @@ async function handleWsMessage(
       break;
     }
 
+    case "permission:respond": {
+      respondToPermission(data as PermissionDecision);
+      break;
+    }
+
     case "terminal:create": {
       const { id, cwd } = data as TerminalCreateArgs;
       const settings = await readSettings();
       const configuredBin = settings.providers?.claude?.binPath ?? settings.claudeBinPath;
-      const claudeBin = configuredBin || resolveSystemClaude() || "claude";
+      const claudeBin = resolveClaudeExecutable(configuredBin) ?? "claude";
       createPty(id, claudeBin, cwd || homedir(), (chunk) => {
         send({ type: "terminal:data", data: { id, data: chunk } });
       });

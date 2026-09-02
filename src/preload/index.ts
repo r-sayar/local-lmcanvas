@@ -8,6 +8,8 @@ import type {
   GenerateGroupSummaryRequest,
   LmcApi,
   CanvasCreateArgs,
+  PermissionDecision,
+  PermissionRequest,
   PersistentProcessStartArgs,
   TerminalCreateArgs,
 } from "@shared/ipc";
@@ -28,11 +30,46 @@ const api: LmcApi = {
   chat: {
     start: (args: ChatStartArgs) => ipcRenderer.invoke("chat:start", args),
     cancel: (chatId) => ipcRenderer.invoke("chat:cancel", chatId),
+    interrupt: (chatId) => ipcRenderer.invoke("chat:interrupt", chatId),
     cancelForNode: (nodeId) => ipcRenderer.invoke("chat:cancelForNode", nodeId),
+    setPermissionMode: (chatId, mode) =>
+      ipcRenderer.invoke("chat:setPermissionMode", chatId, mode),
+    setModel: (chatId, model) => ipcRenderer.invoke("chat:setModel", chatId, model),
+    backgroundTasks: (chatId, toolUseId) =>
+      ipcRenderer.invoke("chat:backgroundTasks", chatId, toolUseId),
+    contextUsage: (chatId) => ipcRenderer.invoke("chat:contextUsage", chatId),
     onEvent: (handler: (ev: ChatEvent) => void) => {
       const listener = (_: Electron.IpcRendererEvent, ev: ChatEvent) => handler(ev);
       ipcRenderer.on("chat:event", listener);
       return () => ipcRenderer.off("chat:event", listener);
+    },
+  },
+  permissions: {
+    onRequest: (handler: (req: PermissionRequest) => void) => {
+      const listener = (_: Electron.IpcRendererEvent, req: PermissionRequest) => handler(req);
+      ipcRenderer.on("permission:request", listener);
+      return () => ipcRenderer.off("permission:request", listener);
+    },
+    respond: (decision: PermissionDecision) =>
+      ipcRenderer.invoke("permission:respond", decision),
+  },
+  claude: {
+    capabilities: (cwd: string, refresh?: boolean) =>
+      ipcRenderer.invoke("claude:capabilities", cwd, refresh),
+    rewind: (chatId: string, userMessageId: string, dryRun?: boolean) =>
+      ipcRenderer.invoke("claude:rewind", chatId, userMessageId, dryRun),
+  },
+  terminal: {
+    create: (args: TerminalCreateArgs) => ipcRenderer.invoke("terminal:create", args),
+    input: (id: string, data: string) => ipcRenderer.send("terminal:input", id, data),
+    resize: (id: string, cols: number, rows: number) =>
+      ipcRenderer.send("terminal:resize", id, cols, rows),
+    kill: (id: string) => ipcRenderer.invoke("terminal:kill", id),
+    onData: (handler: (id: string, data: string) => void) => {
+      const listener = (_: Electron.IpcRendererEvent, id: string, data: string) =>
+        handler(id, data);
+      ipcRenderer.on("terminal:data", listener);
+      return () => ipcRenderer.off("terminal:data", listener);
     },
   },
   dialog: {
@@ -80,20 +117,6 @@ const api: LmcApi = {
   canvasName: {
     generate: (args: GenerateCanvasNameRequest) =>
       ipcRenderer.invoke("canvasName:generate", args),
-  },
-};
-
-api.terminal = {
-  create: (args: TerminalCreateArgs) => ipcRenderer.invoke("terminal:create", args),
-  input: (id: string, data: string) => ipcRenderer.send("terminal:input", id, data),
-  resize: (id: string, cols: number, rows: number) =>
-    ipcRenderer.send("terminal:resize", id, cols, rows),
-  kill: (id: string) => ipcRenderer.invoke("terminal:kill", id),
-  onData: (handler: (id: string, data: string) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, id: string, data: string) =>
-      handler(id, data);
-    ipcRenderer.on("terminal:data", listener);
-    return () => ipcRenderer.off("terminal:data", listener);
   },
 };
 

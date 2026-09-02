@@ -14,6 +14,28 @@ export type ToolUseBlock = {
 
 export type ThinkingBlock = { type: "thinking"; text: string };
 
+export type TodoStatus = "pending" | "in_progress" | "completed";
+
+export type TodoItem = {
+  content: string;
+  status: TodoStatus;
+  activeForm?: string;
+};
+
+/**
+ * A subagent turn nested under a `Task` tool call. Populated when the runner
+ * forwards subagent text (`forwardSubagentText`), so the UI can render the
+ * nested transcript instead of an opaque spinner.
+ */
+export type SubagentBlock = {
+  type: "subagent";
+  /** The `Task` tool_use id this transcript belongs to. */
+  parentToolUseId: string;
+  /** Short present-tense status line, when progress summaries are enabled. */
+  summary?: string;
+  blocks: (TextBlock | ThinkingBlock | ToolUseBlock)[];
+};
+
 export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
 export type ImageBlock = {
@@ -22,9 +44,14 @@ export type ImageBlock = {
   base64: string;
 };
 
-export type ContentBlock = TextBlock | ToolUseBlock | ThinkingBlock | ImageBlock;
+export type ContentBlock =
+  | TextBlock
+  | ToolUseBlock
+  | ThinkingBlock
+  | ImageBlock
+  | SubagentBlock;
 
-export type ErrorCode = "auth_required";
+export type ErrorCode = "auth_required" | "max_turns" | "max_budget" | "interrupted";
 
 export type UsageSummary = {
   inputTokens?: number;
@@ -65,6 +92,12 @@ export type ChatData = {
   parentIds: NodeId[];
   childIds: NodeId[];
   addedContext?: string;
+  /**
+   * Claude Code session this node's conversation lives in. Set from the SDK's
+   * `init` message on the first turn and reused via `resume` on later turns, so
+   * the transcript is never re-sent as text. Branching a child forks it.
+   */
+  sessionId?: string;
   /** When true, the node auto-deletes 10s after its assistant message completes,
    *  unless hovered (hover resets the countdown). Set when the user creates a
    *  follow-up via the Timer half of the selection split-button. */
@@ -73,16 +106,116 @@ export type ChatData = {
 
 export type CanvasNodeType = "custom" | "stickyNote";
 
+/** Mirrors the CLI's `--permission-mode`. */
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "plan"
+  | "bypassPermissions"
+  | "dontAsk";
+
+export const PERMISSION_MODES: readonly PermissionMode[] = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "bypassPermissions",
+  "dontAsk",
+] as const;
+
+/** Mirrors the CLI's `--effort`. */
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+export const EFFORT_LEVELS: readonly EffortLevel[] = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+/** Mirrors the SDK's `ThinkingConfig`. `budgetTokens` only applies to `enabled`. */
+export type ThinkingSetting =
+  | { type: "adaptive" }
+  | { type: "disabled" }
+  | { type: "enabled"; budgetTokens: number };
+
+/** Mirrors the CLI's `--setting-sources`. */
+export type SettingSource = "user" | "project" | "local";
+
+export const SETTING_SOURCES: readonly SettingSource[] = ["user", "project", "local"] as const;
+
+/**
+ * Per-node overrides. Everything here maps onto a Claude Code CLI flag or an
+ * Agent SDK `Options` field; non-Claude providers ignore the Claude-only ones.
+ */
 export type NodeSettings = {
   provider?: Provider;
+  /** Model override for this node. For Claude: e.g. "claude-sonnet-4-6". */
+  model?: string;
   cwd?: string;
   /** Free-text branch label set by the user. No git detection. */
   branch?: string;
-  /** When true, the SDK runs in plan mode — model proposes a plan, cannot use mutating tools. Claude-only. */
+  /** @deprecated superseded by `permissionMode: "plan"`. Read for back-compat, never written. */
   planMode?: boolean;
   /** When true, skip the claude_code preset and disable agent tools — fast pure-chat path. Claude-only. */
   chatOnly?: boolean;
+
+  /** `--permission-mode`. Unset → the app default (`acceptEdits`). Claude-only. */
+  permissionMode?: PermissionMode;
+  /** `--effort`. Claude-only. */
+  effort?: EffortLevel;
+  /** Extended-thinking control. Claude-only. */
+  thinking?: ThinkingSetting;
+  /** `--allowedTools`. Rules like `Bash(git *)` are supported verbatim. Claude-only. */
+  allowedTools?: string[];
+  /** `--disallowedTools`. Claude-only. */
+  disallowedTools?: string[];
+  /** `--add-dir`. Absolute paths the agent may touch beyond cwd. Claude-only. */
+  additionalDirectories?: string[];
+  /** `--max-turns`. Claude-only. */
+  maxTurns?: number;
+  /** `--max-budget-usd`. Claude-only. */
+  maxBudgetUsd?: number;
+  /** `--fallback-model`. Claude-only. */
+  fallbackModel?: string;
+  /** `--agent` — run the main thread as a named subagent. Claude-only. */
+  agent?: string;
+  /** Skills to enable. `"all"` or an explicit list. Claude-only. */
+  skills?: string[] | "all";
+  /** `--setting-sources`. Unset → user+project+local. Claude-only. */
+  settingSources?: SettingSource[];
+  /** Enable file checkpointing so a turn can be rewound. Claude-only. */
+  checkpointing?: boolean;
 };
+
+/** Every key of NodeSettings — the single source of truth for merge/clear/inherit logic. */
+export const NODE_SETTINGS_KEYS = [
+  "provider",
+  "model",
+  "cwd",
+  "branch",
+  "planMode",
+  "chatOnly",
+  "permissionMode",
+  "effort",
+  "thinking",
+  "allowedTools",
+  "disallowedTools",
+  "additionalDirectories",
+  "maxTurns",
+  "maxBudgetUsd",
+  "fallbackModel",
+  "agent",
+  "skills",
+  "settingSources",
+  "checkpointing",
+] as const satisfies readonly (keyof NodeSettings)[];
+
+/** True when at least one override is actually set. */
+export function hasNodeSettings(s: NodeSettings | undefined): boolean {
+  if (!s) return false;
+  return NODE_SETTINGS_KEYS.some((k) => s[k] !== undefined);
+}
 
 export type CanvasNode = {
   id: NodeId;
@@ -164,4 +297,44 @@ export type AppSettings = {
   recentBranches?: string[];
   /** Last node-level overrides applied anywhere; used to seed new orphan nodes. */
   lastNodeSettings?: NodeSettings;
+
+  /** App-wide default permission mode for new nodes. Defaults to `acceptEdits`. */
+  defaultPermissionMode?: PermissionMode;
+  /** App-wide default effort level. Unset → the CLI's own default. */
+  defaultEffort?: EffortLevel;
+  /** App-wide default thinking configuration. */
+  defaultThinking?: ThinkingSetting;
+  /** Which on-disk setting layers to load. Unset → user + project + local. */
+  settingSources?: SettingSource[];
+  /** Enable skills. `"all"`, an explicit list, or unset for the CLI default. */
+  skills?: string[] | "all";
+  /** Extra MCP servers, merged with whatever the CLI already loads from settings. */
+  mcpServers?: Record<string, McpServerSetting>;
+  /** Local plugin directories loaded for every session. */
+  pluginPaths?: string[];
+  /** Emit hook lifecycle events into the timeline. */
+  showHookEvents?: boolean;
+  /** Forward subagent text/thinking so Task blocks render a nested transcript. */
+  forwardSubagentText?: boolean;
+  /** Ask the model for periodic subagent progress summaries. */
+  agentProgressSummaries?: boolean;
+  /** Enable file checkpointing so turns can be rewound. */
+  checkpointing?: boolean;
+  /** Cap on turns per run. Unset → uncapped. */
+  maxTurns?: number;
+  /** Cap on spend per run, USD. Unset → uncapped. */
+  maxBudgetUsd?: number;
+  /** Persist per-tool "always allow" decisions across sessions. */
+  alwaysAllowedTools?: string[];
+  /**
+   * Truncate persisted tool results to this many characters. Full text stays in
+   * the live session; only the on-disk copy is capped. Defaults to 20000.
+   */
+  maxStoredToolResultChars?: number;
 };
+
+/** A user-configured MCP server. Mirrors the SDK's `McpServerConfig` subset we support. */
+export type McpServerSetting =
+  | { type: "stdio"; command: string; args?: string[]; env?: Record<string, string> }
+  | { type: "sse"; url: string; headers?: Record<string, string> }
+  | { type: "http"; url: string; headers?: Record<string, string> };

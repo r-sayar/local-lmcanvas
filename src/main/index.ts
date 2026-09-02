@@ -10,9 +10,25 @@ import {
   deleteCanvas,
 } from "./storage/canvases";
 import { readSettings, writeSettings } from "./storage/settings";
-import { buildPromptWithHistory } from "./claude/history";
-import { runAgent } from "./agents";
-import { runClaudeViaConsole } from "./claude/consoleRunner";
+import {
+  startChatRun,
+  abortChat,
+  abortChatsForNode,
+  abortChatsForSession,
+} from "./chatRun";
+import { getCapabilities, invalidateCapabilities } from "./claude/capabilities";
+import { mergeSlashItems } from "./slashItems";
+import { respondToPermission, cancelPermissionsForSession } from "./claude/permissions";
+import {
+  interruptRun,
+  setRunPermissionMode,
+  setRunModel,
+  backgroundRunTasks,
+  getRunContextUsage,
+  rewindRunFiles,
+  runIdsForNode,
+} from "./claude/sessions";
+import { clearSystemClaudeCache, resolveClaudeExecutable } from "./claude/binary";
 import { generateGroupSummaries } from "./groupSummary/generate";
 import { generateCanvasName } from "./canvasName/generate";
 import { getProviderAuthStatus, openLoginTerminal } from "./auth/providerAuth";
@@ -20,12 +36,11 @@ import { listFiles } from "./files";
 import { listSlashItems } from "./slashItems";
 import { startPersistentProcess, stopPersistentProcess } from "./processes";
 import {
-  cancelAllForWebContents,
+  cancelAllForSession,
   completeRequest as completeAskUser,
 } from "./claude/askUserBridge";
 import { getShellPath } from "./shellPath";
 import { createPty, writePty, resizePty, killPty } from "./terminal/pty";
-import { execSync } from "node:child_process";
 import { initAutoUpdate, checkForUpdatesNow } from "./autoUpdate";
 import type {
   AskUserResponsePayload,
@@ -33,13 +48,15 @@ import type {
   ChatStartArgs,
   CanvasCreateArgs,
   GenerateCanvasNameRequest,
+  PermissionDecision,
   PersistentProcessStartArgs,
   FileEntry,
   GenerateGroupSummaryRequest,
   SlashItem,
   TerminalCreateArgs,
 } from "@shared/ipc";
-import type { AppSettings, Canvas, Provider } from "@shared/types";
+import type { RunnerEvent } from "./agents/types";
+import type { AppSettings, Canvas, PermissionMode, Provider } from "@shared/types";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -95,8 +112,14 @@ function createWindow(hash?: string): BrowserWindow {
   return win;
 }
 
-type ActiveChat = { controller: AbortController; nodeId: string };
-const activeChats = new Map<string, ActiveChat>();
+/**
+ * Stable key for the window that owns a run. Ask-user prompts and permission
+ * requests are addressed to a window, not a chat, so closing one window must not
+ * strand requests belonging to another.
+ */
+function sessionKeyFor(webContentsId: number): string {
+  return `win:${webContentsId}`;
+}
 
 
 const TERSE_NARRATION_INSTRUCTION =
@@ -182,144 +205,82 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("chat:start", async (e, args: ChatStartArgs) => {
-    const {
-      chatId,
-      nodeId,
-      canvasId,
-      history,
-      prompt,
-      attachments,
-      systemPromptOverride,
-      nodeSettings,
-      planMode: inlinePlanMode,
-      chatOnly: inlineChatOnly,
-    } = args;
     const sender = e.sender;
-
-    const send = (ev: ChatEvent) => {
-      if (sender.isDestroyed()) return;
-      sender.send("chat:event", ev);
-    };
-
-    const canvas = await readCanvas(canvasId);
-    if (!canvas) {
-      send({ chatId, type: "error", message: `Canvas not found: ${canvasId}` });
-      send({ chatId, type: "done", isError: true });
-      return;
-    }
-
-    const settings = await readSettings();
-    const combinedPrompt = buildPromptWithHistory(history, prompt);
-    const basePrompt = systemPromptOverride ?? settings.systemPrompt ?? "";
-    const withTerse = settings.terseToolNarration
-      ? basePrompt
-        ? `${basePrompt}\n\n${TERSE_NARRATION_INSTRUCTION}`
-        : TERSE_NARRATION_INSTRUCTION
-      : basePrompt;
-    const builtInPrompt = `${PERSISTENT_PROCESS_INSTRUCTION}\n\n${NEXT_STEPS_INSTRUCTION}`;
-    const systemPrompt = withTerse ? `${withTerse}\n\n${builtInPrompt}` : builtInPrompt;
-
-    const provider: Provider =
-      nodeSettings?.provider ?? canvas.provider ?? settings.defaultProvider ?? "claude";
-    const providerCfg = settings.providers?.[provider];
-    const binPath =
-      providerCfg?.binPath ??
-      (provider === "claude" ? settings.claudeBinPath : undefined);
-    const model =
-      providerCfg?.model ??
-      (provider === "claude" ? settings.claudeModel : undefined);
-
-    // Effective cwd: node override → canvas → user home (least-invasive fallback so
-    // every provider runner — which require a string cwd — always has one).
-    const effectiveCwd = nodeSettings?.cwd ?? canvas.cwd ?? homedir();
-
-    // Plan mode resolves as: one-shot inline /plan OR persistent node setting.
-    // Claude-only — codex/cursor runners ignore the flag.
-    const planMode = Boolean(inlinePlanMode) || Boolean(nodeSettings?.planMode);
-    const chatOnly = Boolean(inlineChatOnly) || Boolean(nodeSettings?.chatOnly);
-
-    const controller = new AbortController();
-    activeChats.set(chatId, { controller, nodeId });
-
-    send({ chatId, type: "start" });
-
-    // Shared event → IPC translator used by both runners.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const onEvent = (ev: any): void => {
-      switch (ev.kind) {
-        case "text_delta":
-          send({ chatId, type: "text_delta", text: ev.text });
-          return;
-        case "thinking_delta":
-          send({ chatId, type: "thinking_delta", text: ev.text });
-          return;
-        case "tool_use":
-          send({ chatId, type: "tool_use", toolUseId: ev.toolUseId, name: ev.name, input: ev.input });
-          return;
-        case "tool_result":
-          send({ chatId, type: "tool_result", toolUseId: ev.toolUseId, content: ev.content, isError: ev.isError });
-          return;
-        case "error":
-          send({ chatId, type: "error", message: ev.message, code: ev.code, provider });
-          return;
-        case "done":
-          send({ chatId, type: "done", isError: ev.isError, result: ev.result, code: ev.code, usage: ev.usage, provider: ev.isError ? provider : undefined });
-          return;
-      }
-    };
-
-    try {
-      if (provider === "claude") {
-        const resolvedBin = binPath ?? (() => {
-          try { return execSync("which claude", { encoding: "utf8" }).trim().split("\n")[0]; } catch { return "claude"; }
-        })();
-        const terminalSessionId = `terminal:${canvasId}`;
-        await runClaudeViaConsole(combinedPrompt, {
-          cwd: effectiveCwd,
-          binPath: resolvedBin,
-          signal: controller.signal,
-          onEvent,
-          onTerminalData: (data) => {
-            if (!sender.isDestroyed()) sender.send("terminal:data", terminalSessionId, data);
-          },
-        });
-      } else {
-        await runAgent(provider, combinedPrompt, {
-          cwd: effectiveCwd,
-          model,
-          binPath,
-          systemPrompt,
-          attachments,
-          signal: controller.signal,
-          planMode,
-          chatOnly,
-          webContents: sender,
-          nodeId,
-          onEvent,
-        });
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      send({ chatId, type: "error", message, provider });
-      send({ chatId, type: "done", isError: true, provider });
-    } finally {
-      activeChats.delete(chatId);
-    }
+    await startChatRun(args, {
+      sessionKey: sessionKeyFor(sender.id),
+      sendChatEvent: (ev: ChatEvent) => {
+        if (!sender.isDestroyed()) sender.send("chat:event", ev);
+      },
+      // Ask-user prompts and permission requests travel on their own channels
+      // but are addressed to the same window, so they share one sender.
+      sendToClient: (msg: object) => {
+        if (sender.isDestroyed()) return;
+        const envelope = msg as { type?: string; data?: unknown };
+        if (envelope.type === "askUser:request") {
+          sender.send("askUser:request", envelope.data);
+        } else if (envelope.type === "permission:request") {
+          sender.send("permission:request", envelope.data);
+        }
+      },
+    });
   });
 
+
   ipcMain.handle("chat:cancel", async (e, chatId: string) => {
-    activeChats.get(chatId)?.controller.abort();
-    activeChats.delete(chatId);
-    cancelAllForWebContents(e.sender);
+    abortChat(chatId);
+    const key = sessionKeyFor(e.sender.id);
+    cancelAllForSession(key);
+    cancelPermissionsForSession(key);
+  });
+
+  /**
+   * Graceful stop. Asks the CLI to wind the turn down so the partial answer
+   * stays coherent and the session is still resumable; only if there is no live
+   * session do we fall back to killing the process.
+   */
+  ipcMain.handle("chat:interrupt", async (_e, chatId: string) => {
+    const interrupted = await interruptRun(chatId);
+    if (!interrupted) abortChat(chatId);
   });
 
   ipcMain.handle("chat:cancelForNode", async (_e, nodeId: string) => {
-    for (const [chatId, entry] of activeChats) {
-      if (entry.nodeId !== nodeId) continue;
-      entry.controller.abort();
-      activeChats.delete(chatId);
-    }
+    abortChatsForNode(nodeId);
+    for (const chatId of runIdsForNode(nodeId)) abortChat(chatId);
   });
+
+  ipcMain.handle("chat:setPermissionMode", async (_e, chatId: string, mode: PermissionMode) => {
+    await setRunPermissionMode(chatId, mode);
+  });
+
+  ipcMain.handle("chat:setModel", async (_e, chatId: string, model?: string) => {
+    await setRunModel(chatId, model);
+  });
+
+  ipcMain.handle("chat:backgroundTasks", async (_e, chatId: string, toolUseId?: string) =>
+    backgroundRunTasks(chatId, toolUseId)
+  );
+
+  ipcMain.handle("chat:contextUsage", async (_e, chatId: string) => getRunContextUsage(chatId));
+
+  ipcMain.handle("permission:respond", async (_e, decision: PermissionDecision) => {
+    respondToPermission(decision);
+  });
+
+  ipcMain.handle("claude:capabilities", async (_e, cwd: string, refresh?: boolean) => {
+    const settings = await readSettings();
+    const binPath = settings.providers?.claude?.binPath ?? settings.claudeBinPath;
+    const caps = await getCapabilities(cwd ?? "", binPath, refresh === true);
+    // The CLI knows its built-ins and plugins; the disk scan knows project files
+    // the CLI may not surface. Merge so the picker shows the union of both.
+    const onDisk = await listSlashItems(cwd ?? "");
+    return { ...caps, commands: mergeSlashItems(caps.commands, onDisk) };
+  });
+
+  ipcMain.handle(
+    "claude:rewind",
+    async (_e, chatId: string, userMessageId: string, dryRun?: boolean) =>
+      rewindRunFiles(chatId, userMessageId, dryRun)
+  );
 
   ipcMain.handle("askUser:respond", async (_e, payload: AskUserResponsePayload) => {
     completeAskUser(payload);
@@ -383,15 +344,7 @@ function registerIpc(): void {
   ipcMain.handle("terminal:create", async (e, args: TerminalCreateArgs) => {
     const settings = await readSettings();
     const configuredBin = settings.providers?.claude?.binPath ?? settings.claudeBinPath;
-    let claudeBin = configuredBin;
-    if (!claudeBin) {
-      try {
-        const cmd = process.platform === "win32" ? "where claude" : "which claude";
-        claudeBin = execSync(cmd, { encoding: "utf8" }).trim().split("\n")[0];
-      } catch {
-        claudeBin = "claude";
-      }
-    }
+    const claudeBin = resolveClaudeExecutable(configuredBin) ?? "claude";
     const cwd = args.cwd || homedir();
     createPty(args.id, claudeBin, cwd, (data) => {
       e.sender.send("terminal:data", args.id, data);
