@@ -185,7 +185,13 @@ export function CanvasPage({ ids }: CanvasPageProps) {
           folder rather than the user's home directory. */}
       <TerminalPanel canvasId={activeCanvasId} cwd={activePaneCwd} />
 
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+      {/* Pass the active pane's cwd so the MCP/skills/agents listing reflects
+          the folder being worked in, not just the user-level configuration. */}
+      <SettingsModal
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        cwd={activePaneCwd}
+      />
       <SplitPanePicker
         open={showSplitPicker}
         onClose={() => setShowSplitPicker(false)}

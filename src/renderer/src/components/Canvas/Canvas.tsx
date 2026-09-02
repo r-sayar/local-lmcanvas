@@ -35,6 +35,7 @@ import {
   buildGroupSummaryInput,
   type DraftNode,
   type GeneratedNodeSummary,
+  type GroupSummaryCandidate,
 } from "@/lib/groupSummary";
 import { useGroupSummaries } from "@/hooks/useGroupSummaries";
 import type { ChatData } from "@shared/types";
@@ -288,17 +289,32 @@ function CanvasInner() {
   // Pull each node's latest user prompt as the candidate input for group
   // titling. The hook handles LLM-backed generation (debounced, with the
   // heuristic clusterer as immediate placeholder and graceful fallback).
+  //
+  // Derived from the store rather than `rfNodes` so dragging and selection
+  // don't rebuild it, and kept referentially stable while the prompts are
+  // unchanged so streamed tokens don't re-fingerprint (and re-debounce the
+  // LLM call) on every frame.
+  const candidatesRef = useRef<GroupSummaryCandidate[]>([]);
   const candidates = useMemo(() => {
     const drafts: DraftNode[] = [];
-    for (const n of rfNodes) {
+    for (const n of Object.values(nodesById)) {
       const chat = (n.data as { chat?: ChatData }).chat;
       if (!chat) continue;
       const draft: DraftNode = { id: n.id, messages: chat.messages };
       if (chat.addedContext) draft.addedContext = chat.addedContext;
       drafts.push(draft);
     }
-    return buildGroupSummaryInput(drafts);
-  }, [rfNodes]);
+    const next = buildGroupSummaryInput(drafts);
+    const prev = candidatesRef.current;
+    const unchanged =
+      prev.length === next.length &&
+      next.every(
+        (c, i) => c.nodeId === prev[i].nodeId && c.prompt === prev[i].prompt,
+      );
+    if (unchanged) return prev;
+    candidatesRef.current = next;
+    return next;
+  }, [nodesById]);
 
   const mockNodeSummaries = useMemo<GeneratedNodeSummary[]>(() => {
     return candidates.map((c) => ({

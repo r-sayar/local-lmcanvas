@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { ChevronRight, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import clsx from "clsx";
 import type { ToolUseBlock } from "@shared/types";
@@ -15,7 +15,7 @@ type Props = {
   totalChunks?: number;
 };
 
-export function ToolGroupView({
+function ToolGroupViewImpl({
   blocks,
   nodeId,
   awaitingText = false,
@@ -116,3 +116,5 @@ export function ToolGroupView({
     </div>
   );
 }
+
+export const ToolGroupView = memo(ToolGroupViewImpl);

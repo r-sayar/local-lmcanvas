@@ -3,6 +3,8 @@ import { HomePage } from "./pages/HomePage";
 import { CanvasPage } from "./pages/CanvasPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { subscribeAskUserRequests } from "./hooks/useAskUserStore";
+import { subscribePermissionRequests } from "./hooks/usePermissionStore";
+import { subscribeActiveRuns } from "./hooks/useActiveRunStore";
 import { useApplyTheme } from "./hooks/useApplyTheme";
 import { useRecentsStore } from "./hooks/useRecentsStore";
 
@@ -37,6 +39,8 @@ export function App() {
   }, []);
 
   useEffect(() => subscribeAskUserRequests(), []);
+  useEffect(() => subscribePermissionRequests(), []);
+  useEffect(() => subscribeActiveRuns(), []);
 
   useEffect(() => {
     void useRecentsStore.getState().hydrate();

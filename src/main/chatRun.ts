@@ -105,8 +105,8 @@ export async function startChatRun(args: ChatStartArgs, host: ChatHost): Promise
 
   const canvas = await readCanvas(canvasId);
   if (!canvas) {
-    send({ chatId, type: "error", message: `Canvas not found: ${canvasId}` });
-    send({ chatId, type: "done", isError: true });
+    send({ chatId, nodeId, type: "error", message: `Canvas not found: ${canvasId}` });
+    send({ chatId, nodeId, type: "done", isError: true });
     return;
   }
 
@@ -139,10 +139,10 @@ export async function startChatRun(args: ChatStartArgs, host: ChatHost): Promise
   const controller = new AbortController();
   activeChats.set(chatId, { controller, nodeId, sessionKey: host.sessionKey });
 
-  send({ chatId, type: "start" });
+  send({ chatId, nodeId, type: "start" });
 
   const onEvent = (ev: RunnerEvent): void => {
-    const translated = toChatEvent(chatId, provider, ev);
+    const translated = toChatEvent(chatId, nodeId, provider, ev);
     if (translated) send(translated);
   };
 
@@ -190,8 +190,8 @@ export async function startChatRun(args: ChatStartArgs, host: ChatHost): Promise
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    send({ chatId, type: "error", message, provider });
-    send({ chatId, type: "done", isError: true, provider });
+    send({ chatId, nodeId, type: "error", message, provider });
+    send({ chatId, nodeId, type: "done", isError: true, provider });
   } finally {
     activeChats.delete(chatId);
   }
@@ -212,17 +212,19 @@ async function persistAlwaysAllowRule(rule: string): Promise<void> {
 
 function toChatEvent(
   chatId: string,
+  nodeId: string,
   provider: Provider,
   ev: RunnerEvent,
 ): ChatEvent | null {
+  const base = { chatId, nodeId };
   switch (ev.kind) {
     case "text_delta":
-      return { chatId, type: "text_delta", text: ev.text };
+      return { ...base, type: "text_delta", text: ev.text };
     case "thinking_delta":
-      return { chatId, type: "thinking_delta", text: ev.text };
+      return { ...base, type: "thinking_delta", text: ev.text };
     case "tool_use":
       return {
-        chatId,
+        ...base,
         type: "tool_use",
         toolUseId: ev.toolUseId,
         name: ev.name,
@@ -231,7 +233,7 @@ function toChatEvent(
       };
     case "tool_result":
       return {
-        chatId,
+        ...base,
         type: "tool_result",
         toolUseId: ev.toolUseId,
         content: ev.content,
@@ -239,10 +241,10 @@ function toChatEvent(
         parentToolUseId: ev.parentToolUseId,
       };
     case "session":
-      return { chatId, type: "session", sessionId: ev.sessionId };
+      return { ...base, type: "session", sessionId: ev.sessionId };
     case "subagent_delta":
       return {
-        chatId,
+        ...base,
         type: "subagent_delta",
         parentToolUseId: ev.parentToolUseId,
         kind: ev.subKind,
@@ -250,32 +252,32 @@ function toChatEvent(
       };
     case "subagent_progress":
       return {
-        chatId,
+        ...base,
         type: "subagent_progress",
         parentToolUseId: ev.parentToolUseId,
         summary: ev.summary,
       };
     case "todos":
-      return { chatId, type: "todos", todos: ev.todos };
+      return { ...base, type: "todos", todos: ev.todos };
     case "hook":
-      return { chatId, type: "hook", event: ev.event, status: ev.status, detail: ev.detail };
+      return { ...base, type: "hook", event: ev.event, status: ev.status, detail: ev.detail };
     case "task_notification":
       return {
-        chatId,
+        ...base,
         type: "task_notification",
         taskId: ev.taskId,
         status: ev.status,
         summary: ev.summary,
       };
     case "prompt_suggestion":
-      return { chatId, type: "prompt_suggestion", prompt: ev.prompt };
+      return { ...base, type: "prompt_suggestion", prompt: ev.prompt };
     case "compact":
-      return { chatId, type: "compact", trigger: ev.trigger };
+      return { ...base, type: "compact", trigger: ev.trigger };
     case "error":
-      return { chatId, type: "error", message: ev.message, code: ev.code, provider };
+      return { ...base, type: "error", message: ev.message, code: ev.code, provider };
     case "done":
       return {
-        chatId,
+        ...base,
         type: "done",
         isError: ev.isError,
         result: ev.result,

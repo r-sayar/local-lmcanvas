@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react";
-import { Brain, Check, ChevronDown } from "lucide-react";
+import { Brain, Check, ChevronDown, Loader2 } from "lucide-react";
 import clsx from "clsx";
+import type { ModelInfo } from "@shared/ipc";
 import type { AppSettings, CanvasNode, NodeId, Provider } from "@shared/types";
 import { useCanvasStore, useCanvasStoreApi } from "@/hooks/useCanvasStore";
+import { useClaudeCapabilities } from "@/hooks/useClaudeCapabilities";
 import { ProviderLogo } from "./ProviderLogo";
 import { BadgePopover } from "./BadgePopover";
 
-type ClaudeModel = { id: string; label: string };
-
-const CLAUDE_MODELS: ClaudeModel[] = [
-  { id: "claude-opus-4-7", label: "Opus 4.7" },
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
-  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+/** Used until the CLI answers, and whenever the capability probe fails. */
+const FALLBACK_MODELS: ModelInfo[] = [
+  { id: "claude-opus-4-7", displayName: "Opus 4.7" },
+  { id: "claude-sonnet-4-6", displayName: "Sonnet 4.6" },
+  { id: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5" },
 ];
 
 type NonClaudeOption = { provider: Exclude<Provider, "claude">; label: string };
@@ -32,8 +33,11 @@ export function ModelBadge({ nodeId }: Props) {
   const effectiveProvider = useCanvasStore((s) => s.getEffectiveProvider(nodeId));
   const overrideProvider = useCanvasStore((s) => s.nodes[nodeId]?.data.nodeSettings?.provider);
   const overrideModel = useCanvasStore((s) => s.nodes[nodeId]?.data.nodeSettings?.model);
-  const setNodeSettings = useCanvasStore((s) => s.setNodeSettings);
-  const storeApi = useCanvasStoreApi();
+  const cwd = useCanvasStore((s) => s.getEffectiveCwd(nodeId));
+  // Label-only read: the probe itself is deferred until the popover opens, so
+  // loading a canvas never spawns a CLI per node.
+  const { models } = useClaudeCapabilities(cwd, { enabled: false });
+  const claudeModels = models.length > 0 ? models : FALLBACK_MODELS;
 
   const [globalModel, setGlobalModel] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -45,11 +49,11 @@ export function ModelBadge({ nodeId }: Props) {
   const overridden = overrideProvider !== undefined || overrideModel !== undefined;
 
   const activeModelId = effectiveProvider === "claude"
-    ? (overrideModel ?? globalModel ?? "claude-opus-4-7")
+    ? (overrideModel ?? globalModel ?? claudeModels[0]?.id ?? "claude-opus-4-7")
     : null;
 
   const badgeLabel = activeModelId
-    ? (CLAUDE_MODELS.find((m) => m.id === activeModelId)?.label ?? activeModelId)
+    ? (claudeModels.find((m) => m.id === activeModelId)?.displayName ?? activeModelId)
     : NON_CLAUDE_OPTIONS.find((o) => o.provider === effectiveProvider)?.label ?? effectiveProvider;
 
   return (
@@ -68,80 +72,115 @@ export function ModelBadge({ nodeId }: Props) {
         </>
       }
     >
-      {({ close }) => {
-        const usageByProvider = aggregateUsage(storeApi.getState().nodes);
-        return (
-          <div role="listbox">
-            <div
-              className="px-2.5 pt-2 pb-1 text-[8px] uppercase tracking-[0.14em] text-muted-foreground"
-              style={{ fontFamily: "var(--font-geist-mono)" }}
-            >
-              Node model
-            </div>
-
-            {CLAUDE_MODELS.map((m) => {
-              const isActive = effectiveProvider === "claude" && activeModelId === m.id;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  role="option"
-                  aria-selected={isActive}
-                  onClick={() => {
-                    setNodeSettings(nodeId, { provider: "claude", model: m.id });
-                    close();
-                  }}
-                  className={clsx(
-                    "w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors cursor-pointer",
-                    isActive ? "bg-accent/15 text-foreground" : "text-foreground hover:bg-muted",
-                  )}
-                >
-                  <ProviderLogo provider="claude" size={12} />
-                  <span className="flex-1 min-w-0">
-                    <span className="block truncate">{m.label}</span>
-                    <span className="block text-[9px] text-muted-foreground">
-                      {formatUsage(usageByProvider.claude)}
-                    </span>
-                  </span>
-                  {isActive && <Check className="h-3 w-3 text-foreground/70" />}
-                </button>
-              );
-            })}
-
-            <div className="mx-2.5 my-1 border-t border-border/40" />
-
-            {NON_CLAUDE_OPTIONS.map((opt) => {
-              const isActive = effectiveProvider === opt.provider;
-              return (
-                <button
-                  key={opt.provider}
-                  type="button"
-                  role="option"
-                  aria-selected={isActive}
-                  onClick={() => {
-                    setNodeSettings(nodeId, { provider: opt.provider, model: undefined });
-                    close();
-                  }}
-                  className={clsx(
-                    "w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors cursor-pointer",
-                    isActive ? "bg-accent/15 text-foreground" : "text-foreground hover:bg-muted",
-                  )}
-                >
-                  <ProviderLogo provider={opt.provider} size={12} />
-                  <span className="flex-1 min-w-0">
-                    <span className="block truncate">{opt.label}</span>
-                    <span className="block text-[9px] text-muted-foreground">
-                      {formatUsage(usageByProvider[opt.provider])}
-                    </span>
-                  </span>
-                  {isActive && <Check className="h-3 w-3 text-foreground/70" />}
-                </button>
-              );
-            })}
-          </div>
-        );
-      }}
+      {({ close }) => (
+        <ModelOptions
+          nodeId={nodeId}
+          cwd={cwd}
+          effectiveProvider={effectiveProvider}
+          activeModelId={activeModelId}
+          close={close}
+        />
+      )}
     </BadgePopover>
+  );
+}
+
+function ModelOptions({
+  nodeId,
+  cwd,
+  effectiveProvider,
+  activeModelId,
+  close,
+}: {
+  nodeId: NodeId;
+  cwd: string | undefined;
+  effectiveProvider: Provider;
+  activeModelId: string | null;
+  close: () => void;
+}) {
+  const setNodeSettings = useCanvasStore((s) => s.setNodeSettings);
+  const storeApi = useCanvasStoreApi();
+  const { models, loading, error } = useClaudeCapabilities(cwd);
+  const claudeModels = models.length > 0 ? models : FALLBACK_MODELS;
+  const usageByProvider = aggregateUsage(storeApi.getState().nodes);
+
+  return (
+    <div role="listbox">
+      <div
+        className="flex items-center gap-1 px-2.5 pt-2 pb-1 text-[8px] uppercase tracking-[0.14em] text-muted-foreground"
+        style={{ fontFamily: "var(--font-geist-mono)" }}
+      >
+        Node model
+        {loading && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+      </div>
+
+      {claudeModels.map((m) => {
+        const isActive = effectiveProvider === "claude" && activeModelId === m.id;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            role="option"
+            aria-selected={isActive}
+            title={m.description}
+            onClick={() => {
+              setNodeSettings(nodeId, { provider: "claude", model: m.id });
+              close();
+            }}
+            className={clsx(
+              "w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors cursor-pointer",
+              isActive ? "bg-accent/15 text-foreground" : "text-foreground hover:bg-muted",
+            )}
+          >
+            <ProviderLogo provider="claude" size={12} />
+            <span className="flex-1 min-w-0">
+              <span className="block truncate">{m.displayName}</span>
+              <span className="block text-[9px] text-muted-foreground">
+                {formatUsage(usageByProvider.claude)}
+              </span>
+            </span>
+            {isActive && <Check className="h-3 w-3 text-foreground/70" />}
+          </button>
+        );
+      })}
+
+      {error && (
+        <div className="px-2.5 py-1 text-[9px] text-muted-foreground">
+          Model list unavailable — showing defaults.
+        </div>
+      )}
+
+      <div className="mx-2.5 my-1 border-t border-border/40" />
+
+      {NON_CLAUDE_OPTIONS.map((opt) => {
+        const isActive = effectiveProvider === opt.provider;
+        return (
+          <button
+            key={opt.provider}
+            type="button"
+            role="option"
+            aria-selected={isActive}
+            onClick={() => {
+              setNodeSettings(nodeId, { provider: opt.provider, model: undefined });
+              close();
+            }}
+            className={clsx(
+              "w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors cursor-pointer",
+              isActive ? "bg-accent/15 text-foreground" : "text-foreground hover:bg-muted",
+            )}
+          >
+            <ProviderLogo provider={opt.provider} size={12} />
+            <span className="flex-1 min-w-0">
+              <span className="block truncate">{opt.label}</span>
+              <span className="block text-[9px] text-muted-foreground">
+                {formatUsage(usageByProvider[opt.provider])}
+              </span>
+            </span>
+            {isActive && <Check className="h-3 w-3 text-foreground/70" />}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

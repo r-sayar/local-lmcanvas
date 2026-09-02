@@ -7,3 +7,4 @@ export { ProviderRow } from "./ProviderRow";
 export { KeybindingsSetting } from "./KeybindingsSetting";
 export { KeybindingsPage } from "./KeybindingsPage";
 export { FinishSoundSetting } from "./FinishSoundSetting";
+export { ClaudeSettings } from "./ClaudeSettings";

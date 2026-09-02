@@ -41,6 +41,8 @@ export type CanvasStoreState = {
   provider: Provider | undefined;
   /** Mirror of AppSettings.defaultProvider — populated on canvas load so effective-provider lookups don't have to hit IPC. */
   defaultProvider: Provider | undefined;
+  /** Mirror of AppSettings.maxStoredToolResultChars — applied when serializing. */
+  maxStoredToolResultChars: number;
   nodes: Record<NodeId, CanvasNode>;
   edges: CanvasEdge[];
   loaded: boolean;
@@ -156,14 +158,68 @@ function makeEdgeId(source: NodeId, target: NodeId): string {
   return `e-${source}-${target}`;
 }
 
+/** Fallback when AppSettings hasn't been read yet. Mirrors the main-process default. */
+const DEFAULT_MAX_STORED_TOOL_RESULT_CHARS = 20_000;
+
+/**
+ * Cap a tool result for persistence. The live store keeps the full text —
+ * only the on-disk copy is capped, because a single node can otherwise carry
+ * megabytes of verbatim WebSearch/Read output into the canvas JSON.
+ */
+function truncateForStorage(content: string, max: number): string {
+  if (max <= 0 || content.length <= max) return content;
+  const dropped = content.length - max;
+  return `${content.slice(0, max)}\n… truncated ${dropped} characters`;
+}
+
+function blockForStorage(block: ContentBlock, max: number): ContentBlock {
+  if (block.type === "tool_use") {
+    if (!block.result) return block;
+    const content = truncateForStorage(block.result.content, max);
+    if (content === block.result.content) return block;
+    return { ...block, result: { ...block.result, content } };
+  }
+  if (block.type === "subagent") {
+    const blocks = mapBlocksForStorage(block.blocks, max);
+    return blocks === block.blocks ? block : { ...block, blocks };
+  }
+  return block;
+}
+
+function mapBlocksForStorage<T extends ContentBlock>(blocks: T[], max: number): T[] {
+  let changed = false;
+  const next = blocks.map((b) => {
+    const mapped = blockForStorage(b, max) as T;
+    if (mapped !== b) changed = true;
+    return mapped;
+  });
+  return changed ? next : blocks;
+}
+
+function nodeForStorage(node: CanvasNode, max: number): CanvasNode {
+  let changed = false;
+  const messages = node.data.chat.messages.map((m) => {
+    const blocks = mapBlocksForStorage(m.blocks, max);
+    if (blocks === m.blocks) return m;
+    changed = true;
+    return { ...m, blocks };
+  });
+  if (!changed) return node;
+  return {
+    ...node,
+    data: { ...node.data, chat: { ...node.data.chat, messages } },
+  };
+}
+
 function canvasFromState(s: CanvasStoreState): Canvas | null {
   if (!s.canvasId) return null;
+  const max = s.maxStoredToolResultChars;
   return {
     id: s.canvasId,
     name: s.name,
     createdAt: s.createdAt,
     updatedAt: Date.now(),
-    nodes: Object.values(s.nodes),
+    nodes: Object.values(s.nodes).map((n) => nodeForStorage(n, max)),
     edges: s.edges,
     provider: s.provider,
     ...(s.cwd ? { cwd: s.cwd } : {}),
@@ -252,6 +308,7 @@ export function createCanvasStoreApi(): CanvasStoreApi {
       createdAt: 0,
       provider: undefined,
       defaultProvider: undefined,
+      maxStoredToolResultChars: DEFAULT_MAX_STORED_TOOL_RESULT_CHARS,
       nodes: {},
       edges: [],
       loaded: false,
@@ -376,6 +433,8 @@ export function createCanvasStoreApi(): CanvasStoreApi {
           createdAt: canvas.createdAt,
           provider: canvas.provider,
           defaultProvider: settings.defaultProvider,
+          maxStoredToolResultChars:
+            settings.maxStoredToolResultChars ?? DEFAULT_MAX_STORED_TOOL_RESULT_CHARS,
           nodes,
           edges: canvas.edges,
           loaded: true,

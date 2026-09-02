@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useMemo, useRef, useState } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CornerDownRight, GitMerge, Plus } from "lucide-react";
@@ -8,6 +8,7 @@ import { useCanvasStore } from "@/hooks/useCanvasStore";
 import { ModelBadge } from "./ModelBadge";
 import { FolderBadge } from "./FolderBadge";
 import { FastBadge } from "./FastBadge";
+import { PermissionModeBadge } from "./PermissionModeBadge";
 import { OnboardingTitle } from "./OnboardingTitle";
 import { useNodeChat } from "@/hooks/useNodeChat";
 import type { CanvasNode, ImageBlock } from "@shared/types";
@@ -15,6 +16,8 @@ import type { Attachment } from "@shared/ipc";
 import { NodeResponse } from "./NodeResponse";
 import { NodePromptInput, type NodePromptInputHandle } from "./NodePromptInput";
 import { AskUserPrompt } from "./AskUserPrompt";
+import { PermissionPrompt } from "./PermissionPrompt";
+import { TodoList } from "./TodoList";
 import { SelectionActionButton } from "./SelectionActionButton";
 import { CustomNodeContextBanner } from "./CustomNodeContextBanner";
 import { TemporaryBadge } from "./TemporaryBadge";
@@ -22,6 +25,7 @@ import { NodeCopyButton } from "./NodeCopyButton";
 import { NodeSourceHandles, NodeTargetHandles } from "./NodeHandles";
 import { ResizeHandle } from "./ResizeHandle";
 import { useAskUserStore } from "@/hooks/useAskUserStore";
+import { usePermissionStore } from "@/hooks/usePermissionStore";
 import { useSelection } from "@/hooks/useSelection";
 import { NODE_WIDTH } from "@/lib/canvasConstants";
 import { useBranchFromNode } from "@/hooks/useBranchFromNode";
@@ -46,7 +50,11 @@ function CustomNodeImpl(props: NodeProps) {
   const startMerge = useCanvasStore((s) => s.startMerge);
   const toggleMergeNode = useCanvasStore((s) => s.toggleMergeNode);
   const askUserRequest = useAskUserStore((s) => s.byNode[id]);
+  const permissionQueue = usePermissionStore((s) => s.queueByNode[id]);
+  const permissionRequest = permissionQueue?.[0];
   const isSingleNode = useCanvasStore((s) => Object.keys(s.nodes).length === 1);
+  // Both prompts block the run until answered, so they get the same node accent.
+  const awaitingUser = Boolean(askUserRequest) || Boolean(permissionRequest);
 
   const [hovered, setHovered] = useState(false);
   const [showAppendInput, setShowAppendInput] = useState(false);
@@ -79,6 +87,33 @@ function CustomNodeImpl(props: NodeProps) {
 
   const branch = useBranchFromNode(id);
   useSelectionBranchOnEnter(selection, branch);
+
+  // Stable identities so `NodeResponse` (memoized) doesn't re-render every
+  // block of every message whenever this node re-renders for hover/selection.
+  const handleSuggestionClick = useCallback(
+    (prompt: string) =>
+      branch({
+        prefill: prompt,
+        autoSubmit: true,
+        placeBelow: true,
+        focusViewport: false,
+      }),
+    [branch],
+  );
+
+  const dismissHandlers = useRef(new Map<string, () => void>());
+  const dismissHandlerFor = useCallback(
+    (messageId: string) => {
+      const cache = dismissHandlers.current;
+      let handler = cache.get(messageId);
+      if (!handler) {
+        handler = () => dismissMessageError(id, messageId);
+        cache.set(messageId, handler);
+      }
+      return handler;
+    },
+    [id, dismissMessageError],
+  );
 
   const promptEdit = usePromptEdit({
     nodeId: id,
@@ -168,7 +203,7 @@ function CustomNodeImpl(props: NodeProps) {
             ? "border-accent ring-2 ring-accent/70 ring-offset-2 ring-offset-background"
             : merging
             ? "border-border hover:border-accent/60 cursor-pointer"
-            : askUserRequest
+            : awaitingUser
             ? "border-yellow-400/60"
             : fileDrop.dragOver
             ? "border-accent bg-muted"
@@ -200,7 +235,7 @@ function CustomNodeImpl(props: NodeProps) {
           toggleMergeNode(id);
         }}
       >
-        {askUserRequest && (
+        {awaitingUser && (
           <motion.div
             className="pointer-events-none absolute inset-0 rounded-[10px] bg-yellow-400"
             initial={{ opacity: 0 }}
@@ -220,6 +255,7 @@ function CustomNodeImpl(props: NodeProps) {
           <ModelBadge nodeId={id} />
           <FolderBadge nodeId={id} />
           <FastBadge nodeId={id} />
+          <PermissionModeBadge nodeId={id} />
           {isMergeNode && (
             <span
               className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
@@ -324,21 +360,9 @@ function CustomNodeImpl(props: NodeProps) {
                     message={msg}
                     onStop={msg.status === "streaming" ? stop : undefined}
                     nodeId={id}
-                    onSuggestionClick={
-                      isLastAsst
-                        ? (prompt) =>
-                            branch({
-                              prefill: prompt,
-                              autoSubmit: true,
-                              placeBelow: true,
-                              focusViewport: false,
-                            })
-                        : undefined
-                    }
+                    onSuggestionClick={isLastAsst ? handleSuggestionClick : undefined}
                     onDismissError={
-                      msg.status === "error"
-                        ? () => dismissMessageError(id, msg.id)
-                        : undefined
+                      msg.status === "error" ? dismissHandlerFor(msg.id) : undefined
                     }
                   />
                 )}
@@ -360,6 +384,15 @@ function CustomNodeImpl(props: NodeProps) {
                 onCancel={() => setShowAppendInput(false)}
               />
             </div>
+          )}
+
+          <TodoList nodeId={id} />
+
+          {permissionRequest && (
+            <PermissionPrompt
+              request={permissionRequest}
+              queued={(permissionQueue?.length ?? 1) - 1}
+            />
           )}
 
           {askUserRequest && <AskUserPrompt request={askUserRequest} />}

@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { memo, useState, useSyncExternalStore } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -20,31 +20,23 @@ type Props = {
   awaitingText?: boolean;
 };
 
-export function ToolUseView({ block, nodeId, awaitingText = false }: Props) {
-  const cwd = useCanvasStore((s) =>
-    nodeId ? s.getEffectiveCwd(nodeId) : undefined
-  );
+function ToolUseViewImpl({ block, nodeId, awaitingText = false }: Props) {
   if (block.name === "TodoWrite") {
     return <TodoWriteView block={block} />;
   }
   return (
-    <GenericToolView
-      block={block}
-      cwd={cwd}
-      nodeId={nodeId}
-      awaitingText={awaitingText}
-    />
+    <GenericToolView block={block} nodeId={nodeId} awaitingText={awaitingText} />
   );
 }
 
+export const ToolUseView = memo(ToolUseViewImpl);
+
 function GenericToolView({
   block,
-  cwd,
   nodeId,
   awaitingText,
 }: {
   block: ToolUseBlock;
-  cwd?: string;
   nodeId?: string;
   awaitingText: boolean;
 }) {
@@ -98,7 +90,6 @@ function GenericToolView({
           {persistentCommand && (
             <PersistentProcessButton
               command={persistentCommand}
-              cwd={cwd}
               nodeId={nodeId}
               toolRunning={running}
             />
@@ -195,15 +186,19 @@ function wait(ms: number): Promise<void> {
 
 function PersistentProcessButton({
   command,
-  cwd,
   nodeId,
   toolRunning,
 }: {
   command: string;
-  cwd?: string;
   nodeId?: string;
   toolRunning: boolean;
 }) {
+  // Subscribed here rather than in ToolUseView: only long-running commands
+  // need the cwd, so a transcript with hundreds of tool calls doesn't open
+  // hundreds of store subscriptions that re-run on every streamed delta.
+  const cwd = useCanvasStore((s) =>
+    nodeId ? s.getEffectiveCwd(nodeId) : undefined
+  );
   const key = getPersistentProcessKey(command, cwd);
   const state = useSyncExternalStore(
     subscribePersistentProcesses,

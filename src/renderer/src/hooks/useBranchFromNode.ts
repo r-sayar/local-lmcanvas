@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useReactFlow, useStore } from "@xyflow/react";
+import { useReactFlow } from "@xyflow/react";
 import {
   FALLBACK_NODE_HEIGHT,
   NODE_WIDTH,
@@ -46,14 +46,17 @@ export function useBranchFromNode(parentId: string): BranchFn {
   const connectEdge = useCanvasStore((s) => s.connectEdge);
   const movePosition = useCanvasStore((s) => s.movePosition);
   const setPrefill = useCanvasStore((s) => s.setPrefill);
-  const parentNode = useCanvasStore((s) => s.nodes[parentId]);
   const storeApi = useCanvasStoreApi();
-  const zoom = useStore((s) => s.transform[2]);
-  const { screenToFlowPosition } = useReactFlow();
+  // Zoom and the parent node are read at call time, not subscribed: a
+  // subscription here re-renders every node (and every block inside it) on
+  // every zoom frame and every streamed token.
+  const { screenToFlowPosition, getZoom } = useReactFlow();
   const centerOnNode = useCenterOnNode();
 
   return useCallback(
     (opts) => {
+      const zoom = getZoom();
+      const parentNode = storeApi.getState().nodes[parentId];
       const {
         prefill,
         autoSubmit,
@@ -127,11 +130,10 @@ export function useBranchFromNode(parentId: string): BranchFn {
     },
     [
       parentId,
-      parentNode,
       addNode,
       connectEdge,
       setPrefill,
-      zoom,
+      getZoom,
       movePosition,
       centerOnNode,
       screenToFlowPosition,

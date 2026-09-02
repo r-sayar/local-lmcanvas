@@ -170,11 +170,20 @@ export type ChatStartArgs = {
   forkSession?: boolean;
 };
 
-export type ChatEvent =
-  | { chatId: string; type: "start" }
-  | { chatId: string; type: "text_delta"; text: string }
+/**
+ * Every event carries the node it belongs to, not just the chat.
+ *
+ * Global listeners (the permission queue, the timeline) receive events without
+ * any way back to a node otherwise, so the UI could not tell which node a live
+ * run belonged to — which is what stopped a mid-run permission-mode or model
+ * change from reaching the right session.
+ */
+type ChatEventBase = { chatId: string; nodeId: string };
+
+export type ChatEvent = ChatEventBase & (
+  | { type: "start" }
+  | { type: "text_delta"; text: string }
   | {
-      chatId: string;
       type: "tool_use";
       toolUseId: string;
       name: string;
@@ -183,19 +192,17 @@ export type ChatEvent =
       parentToolUseId?: string;
     }
   | {
-      chatId: string;
       type: "tool_result";
       toolUseId: string;
       content: string;
       isError: boolean;
       parentToolUseId?: string;
     }
-  | { chatId: string; type: "thinking_delta"; text: string }
+  | { type: "thinking_delta"; text: string }
   /** The CLI session backing this node, emitted once per run from the `init` message. */
-  | { chatId: string; type: "session"; sessionId: string }
+  | { type: "session"; sessionId: string }
   /** Text or thinking produced inside a subagent, keyed by its parent `Task` call. */
   | {
-      chatId: string;
       type: "subagent_delta";
       parentToolUseId: string;
       kind: "text" | "thinking";
@@ -203,16 +210,14 @@ export type ChatEvent =
     }
   /** Periodic present-tense status for a running subagent. */
   | {
-      chatId: string;
       type: "subagent_progress";
       parentToolUseId: string;
       summary: string;
     }
   /** Latest TodoWrite state, lifted out of the tool block so the UI can pin it. */
-  | { chatId: string; type: "todos"; todos: TodoItem[] }
+  | { type: "todos"; todos: TodoItem[] }
   /** A hook fired. Only emitted when `showHookEvents` is on. */
   | {
-      chatId: string;
       type: "hook";
       event: string;
       status: "started" | "completed" | "failed";
@@ -220,18 +225,16 @@ export type ChatEvent =
     }
   /** A backgrounded Bash command or subagent changed state. */
   | {
-      chatId: string;
       type: "task_notification";
       taskId: string;
       status: string;
       summary?: string;
     }
   /** Model-predicted next prompt, delivered after the result. */
-  | { chatId: string; type: "prompt_suggestion"; prompt: string }
+  | { type: "prompt_suggestion"; prompt: string }
   /** Context compaction happened mid-run. */
-  | { chatId: string; type: "compact"; trigger: string }
+  | { type: "compact"; trigger: string }
   | {
-      chatId: string;
       type: "done";
       isError?: boolean;
       result?: string;
@@ -240,12 +243,11 @@ export type ChatEvent =
       usage?: UsageSummary;
     }
   | {
-      chatId: string;
       type: "error";
       message: string;
       code?: ErrorCode;
       provider?: Provider;
-    };
+    });
 
 export type CanvasCreateArgs = {
   name?: string;

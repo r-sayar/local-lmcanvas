@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Brain, ChevronDown } from "lucide-react";
 import clsx from "clsx";
 
@@ -6,7 +6,7 @@ type Props = {
   text: string;
 };
 
-export function ThinkingView({ text }: Props) {
+function ThinkingViewImpl({ text }: Props) {
   const [expanded, setExpanded] = useState(false);
   const preview = text.trim().split("\n", 1)[0] ?? "";
 
@@ -47,3 +47,5 @@ export function ThinkingView({ text }: Props) {
     </div>
   );
 }
+
+export const ThinkingView = memo(ThinkingViewImpl);

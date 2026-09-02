@@ -30,6 +30,12 @@ const DEFAULTS: AppSettings = {
   showHookEvents: false,
   checkpointing: false,
   alwaysAllowedTools: [],
+  // A guard against one pathological result, not a space optimization.
+  // Measured over 56 real canvases (8.1 MB, 1882 tool results): results are
+  // 45.7% of bytes on disk but the largest is 19,627 chars, so this cap
+  // truncates nothing today. Reclaiming real space would need ~2000, which
+  // truncates 58% of all results and loses content on reload — a bad trade for
+  // 15% of 8 MB. Lower it only if a canvas actually becomes unwieldy.
   maxStoredToolResultChars: 20_000,
 };
 
