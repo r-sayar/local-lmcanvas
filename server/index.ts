@@ -24,7 +24,7 @@ import { generateGroupSummaries } from "../src/main/groupSummary/generate";
 import { generateCanvasName } from "../src/main/canvasName/generate";
 import { getProviderAuthStatus, openLoginTerminal } from "../src/main/auth/providerAuth";
 import { listFiles } from "../src/main/files";
-import { listSlashItems, mergeSlashItems } from "../src/main/slashItems";
+import { listSlashItems, mergeSlashItems, skillNames } from "../src/main/slashItems";
 import { getCapabilities } from "../src/main/claude/capabilities";
 import { respondToPermission, cancelPermissionsForSession } from "../src/main/claude/permissions";
 import {
@@ -134,7 +134,8 @@ app.post("/api/claude/capabilities", async (req, res) => {
   const binPath = settings.providers?.claude?.binPath ?? settings.claudeBinPath;
   const caps = await getCapabilities(cwd ?? "", binPath, refresh === true);
   const onDisk = await listSlashItems(cwd ?? "");
-  res.json({ ...caps, commands: mergeSlashItems(caps.commands, onDisk) });
+  const commands = mergeSlashItems(caps.commands, onDisk);
+  res.json({ ...caps, commands, skills: skillNames(commands) });
 });
 
 app.post("/api/claude/rewind", async (req, res) => {

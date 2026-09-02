@@ -63,9 +63,19 @@ export function mergeSlashItems(fromCli: SlashItem[], fromDisk: SlashItem[]): Sl
     const existing = merged.get(key);
     // Never let a CLI entry mask a client-side one — /plan must stay local.
     if (existing?.clientSide) continue;
-    merged.set(key, item);
+    // The CLI reports skills as plain commands. Keep the disk scan's `skill`
+    // kind when we already know it is one, but take the CLI's argument hint.
+    merged.set(
+      key,
+      existing?.kind === "skill" ? { ...item, kind: "skill" } : item,
+    );
   }
   return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Names of items the merged list identifies as skills rather than commands. */
+export function skillNames(items: SlashItem[]): string[] {
+  return items.filter((i) => i.kind === "skill").map((i) => i.name);
 }
 
 export async function listSlashItems(cwd: string): Promise<SlashItem[]> {

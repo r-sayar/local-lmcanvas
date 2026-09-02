@@ -84,15 +84,13 @@ async function probeCapabilities(
       },
     });
 
-    const [commands, models, agents, mcpServers, init] = await Promise.all([
+    const [commands, models, agents, mcpServers, account] = await Promise.all([
       q.supportedCommands().catch(() => []),
       q.supportedModels().catch(() => []),
       q.supportedAgents().catch(() => []),
       q.mcpServerStatus().catch(() => []),
-      q.initializationResult().catch(() => undefined),
+      q.accountInfo().catch(() => undefined),
     ]);
-
-    const account = await q.accountInfo().catch(() => undefined);
 
     return {
       cwd,
@@ -104,12 +102,16 @@ async function probeCapabilities(
         model: a.model,
       })),
       mcpServers: mcpServers.map(toMcpServerInfo),
-      skills: readSkills(init),
+      // Filled in by the caller from the merged command list — the control
+      // channel's initialize response carries commands/agents/models but no
+      // skills, so there is nothing to read here.
+      skills: [],
       account: account
         ? {
             email: readString(account, "email"),
             organization: readString(account, "organization"),
-            subscription: readString(account, "subscriptionType") ?? readString(account, "subscription"),
+            subscription:
+              readString(account, "subscriptionType") ?? readString(account, "subscription"),
           }
         : undefined,
     };
@@ -174,13 +176,6 @@ function toMcpServerInfo(s: {
         : "pending",
     error: s.error,
   };
-}
-
-function readSkills(init: unknown): string[] {
-  if (typeof init !== "object" || init === null) return [];
-  const skills = (init as { skills?: unknown }).skills;
-  if (!Array.isArray(skills)) return [];
-  return skills.filter((s): s is string => typeof s === "string");
 }
 
 function readString(obj: unknown, key: string): string | undefined {

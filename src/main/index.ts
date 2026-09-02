@@ -17,7 +17,7 @@ import {
   abortChatsForSession,
 } from "./chatRun";
 import { getCapabilities, invalidateCapabilities } from "./claude/capabilities";
-import { mergeSlashItems } from "./slashItems";
+import { mergeSlashItems, skillNames } from "./slashItems";
 import { respondToPermission, cancelPermissionsForSession } from "./claude/permissions";
 import {
   interruptRun,
@@ -273,7 +273,8 @@ function registerIpc(): void {
     // The CLI knows its built-ins and plugins; the disk scan knows project files
     // the CLI may not surface. Merge so the picker shows the union of both.
     const onDisk = await listSlashItems(cwd ?? "");
-    return { ...caps, commands: mergeSlashItems(caps.commands, onDisk) };
+    const commands = mergeSlashItems(caps.commands, onDisk);
+    return { ...caps, commands, skills: skillNames(commands) };
   });
 
   ipcMain.handle(
