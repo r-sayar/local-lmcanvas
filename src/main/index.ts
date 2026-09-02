@@ -12,6 +12,7 @@ import {
 import { readSettings, writeSettings } from "./storage/settings";
 import { buildPromptWithHistory } from "./claude/history";
 import { runAgent } from "./agents";
+import { runClaudeViaConsole } from "./claude/consoleRunner";
 import { generateGroupSummaries } from "./groupSummary/generate";
 import { generateCanvasName } from "./canvasName/generate";
 import { getProviderAuthStatus, openLoginTerminal } from "./auth/providerAuth";
@@ -96,6 +97,7 @@ function createWindow(hash?: string): BrowserWindow {
 
 type ActiveChat = { controller: AbortController; nodeId: string };
 const activeChats = new Map<string, ActiveChat>();
+
 
 const TERSE_NARRATION_INSTRUCTION =
   "RESPONSE STYLE: Before each batch of tool calls (typically 1–5 parallel calls), write ONE very short action-form label as a single line — 3 to 8 words, MAX 10, gerund form. Examples: 'Reading the canvas store', 'Searching for tool handlers', 'Editing the badge component', 'Building the calculator UI'. Strict rules: (1) State ONLY the next action — never two sentences, never an acknowledgment followed by an action. (2) NEVER start with a reaction or judgment word: no 'Good', 'Great', 'Perfect', 'Nice', 'Cool', 'Awesome', 'Excellent', 'Got it', 'Done', 'OK', 'Okay', 'Alright', 'Hmm'. (3) NEVER describe what just happened or summarize a prior result — no 'X created.', 'X done.', 'X works.' Skip straight to the next action. (4) NEVER use first-person prefixes like 'I'll', 'Let me', 'I'm going to', 'Now I will'. (5) No trailing ellipsis. When you fire a long sequence of tool calls, insert a fresh action-form label every ~5 calls. Save longer prose for your final answer to the user.";
@@ -241,67 +243,61 @@ function registerIpc(): void {
 
     send({ chatId, type: "start" });
 
+    // Shared event → IPC translator used by both runners.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onEvent = (ev: any): void => {
+      switch (ev.kind) {
+        case "text_delta":
+          send({ chatId, type: "text_delta", text: ev.text });
+          return;
+        case "thinking_delta":
+          send({ chatId, type: "thinking_delta", text: ev.text });
+          return;
+        case "tool_use":
+          send({ chatId, type: "tool_use", toolUseId: ev.toolUseId, name: ev.name, input: ev.input });
+          return;
+        case "tool_result":
+          send({ chatId, type: "tool_result", toolUseId: ev.toolUseId, content: ev.content, isError: ev.isError });
+          return;
+        case "error":
+          send({ chatId, type: "error", message: ev.message, code: ev.code, provider });
+          return;
+        case "done":
+          send({ chatId, type: "done", isError: ev.isError, result: ev.result, code: ev.code, usage: ev.usage, provider: ev.isError ? provider : undefined });
+          return;
+      }
+    };
+
     try {
-      await runAgent(provider, combinedPrompt, {
-        cwd: effectiveCwd,
-        model,
-        binPath,
-        systemPrompt,
-        attachments,
-        signal: controller.signal,
-        planMode,
-        chatOnly,
-        webContents: sender,
-        nodeId,
-        onEvent: (ev) => {
-          switch (ev.kind) {
-            case "text_delta":
-              send({ chatId, type: "text_delta", text: ev.text });
-              return;
-            case "thinking_delta":
-              send({ chatId, type: "thinking_delta", text: ev.text });
-              return;
-            case "tool_use":
-              send({
-                chatId,
-                type: "tool_use",
-                toolUseId: ev.toolUseId,
-                name: ev.name,
-                input: ev.input,
-              });
-              return;
-            case "tool_result":
-              send({
-                chatId,
-                type: "tool_result",
-                toolUseId: ev.toolUseId,
-                content: ev.content,
-                isError: ev.isError,
-              });
-              return;
-            case "error":
-              send({
-                chatId,
-                type: "error",
-                message: ev.message,
-                code: ev.code,
-                provider,
-              });
-              return;
-            case "done":
-              send({
-                chatId,
-                type: "done",
-                isError: ev.isError,
-                result: ev.result,
-                code: ev.code,
-                usage: ev.usage,
-                provider: ev.isError ? provider : undefined,
-              });
-              return;
-          }
-        },
-      });
+      if (provider === "claude") {
+        const resolvedBin = binPath ?? (() => {
+          try { return execSync("which claude", { encoding: "utf8" }).trim().split("\n")[0]; } catch { return "claude"; }
+        })();
+        const terminalSessionId = `terminal:${canvasId}`;
+        await runClaudeViaConsole(combinedPrompt, {
+          cwd: effectiveCwd,
+          binPath: resolvedBin,
+          signal: controller.signal,
+          onEvent,
+          onTerminalData: (data) => {
+            if (!sender.isDestroyed()) sender.send("terminal:data", terminalSessionId, data);
+          },
+        });
+      } else {
+        await runAgent(provider, combinedPrompt, {
+          cwd: effectiveCwd,
+          model,
+          binPath,
+          systemPrompt,
+          attachments,
+          signal: controller.signal,
+          planMode,
+          chatOnly,
+          webContents: sender,
+          nodeId,
+          onEvent,
+        });
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       send({ chatId, type: "error", message, provider });

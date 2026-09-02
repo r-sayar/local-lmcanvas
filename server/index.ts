@@ -16,6 +16,7 @@ import {
 import { readSettings, writeSettings } from "../src/main/storage/settings";
 import { buildPromptWithHistory } from "../src/main/claude/history";
 import { runAgent } from "../src/main/agents";
+import { runClaudeViaConsole } from "../src/main/claude/consoleRunner";
 import { generateGroupSummaries } from "../src/main/groupSummary/generate";
 import { generateCanvasName } from "../src/main/canvasName/generate";
 import { getProviderAuthStatus, openLoginTerminal } from "../src/main/auth/providerAuth";
@@ -289,33 +290,50 @@ async function handleWsMessage(
 
       send({ type: "chat:event", data: { chatId, type: "start" } });
 
+      const onEvent: Parameters<typeof runClaudeViaConsole>[1]["onEvent"] = (ev) => {
+        const chatEvent = (() => {
+          switch (ev.kind) {
+            case "text_delta": return { chatId, type: "text_delta", text: ev.text };
+            case "thinking_delta": return { chatId, type: "thinking_delta", text: ev.text };
+            case "tool_use": return { chatId, type: "tool_use", toolUseId: ev.toolUseId, name: ev.name, input: ev.input };
+            case "tool_result": return { chatId, type: "tool_result", toolUseId: ev.toolUseId, content: ev.content, isError: ev.isError };
+            case "done": return { chatId, type: "done", isError: ev.isError, result: ev.result, code: ev.code, provider, usage: ev.usage };
+            case "error": return { chatId, type: "error", message: ev.message, code: ev.code, provider };
+            default: return null;
+          }
+        })();
+        if (chatEvent) send({ type: "chat:event", data: chatEvent });
+      };
+
       try {
-        await runAgent(provider, combinedPrompt, {
-          cwd: effectiveCwd,
-          model,
-          binPath,
-          systemPrompt,
-          attachments: args.attachments,
-          signal: controller.signal,
-          planMode: args.planMode || args.nodeSettings?.planMode,
-          sessionId,
-          nodeId,
-          sendToClient: (msg) => send({ type: "chat:event", data: msg }),
-          onEvent: (ev) => {
-            const chatEvent = (() => {
-              switch (ev.kind) {
-                case "text_delta": return { chatId, type: "text_delta", text: ev.text };
-                case "thinking_delta": return { chatId, type: "thinking_delta", text: ev.text };
-                case "tool_use": return { chatId, type: "tool_use", toolUseId: ev.toolUseId, name: ev.name, input: ev.input };
-                case "tool_result": return { chatId, type: "tool_result", toolUseId: ev.toolUseId, content: ev.content, isError: ev.isError };
-                case "done": return { chatId, type: "done", isError: ev.isError, result: ev.result, code: ev.code, provider, usage: ev.usage };
-                case "error": return { chatId, type: "error", message: ev.message, code: ev.code, provider };
-                default: return null;
-              }
-            })();
-            if (chatEvent) send({ type: "chat:event", data: chatEvent });
-          },
-        });
+        if (provider === "claude") {
+          const resolvedBin = binPath ?? resolveSystemClaude() ?? "claude";
+          const nodeModel = args.nodeSettings?.model ?? model ?? undefined;
+          await runClaudeViaConsole(combinedPrompt, {
+            cwd: effectiveCwd,
+            binPath: resolvedBin,
+            model: nodeModel,
+            signal: controller.signal,
+            onEvent,
+            onTerminalData: (chunk) => {
+              send({ type: "terminal:data", data: { id: `terminal:${canvasId}`, data: chunk } });
+            },
+          });
+        } else {
+          await runAgent(provider, combinedPrompt, {
+            cwd: effectiveCwd,
+            model,
+            binPath,
+            systemPrompt,
+            attachments: args.attachments,
+            signal: controller.signal,
+            planMode: args.planMode || args.nodeSettings?.planMode,
+            sessionId,
+            nodeId,
+            sendToClient: (msg) => send({ type: "chat:event", data: msg }),
+            onEvent,
+          });
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         send({ type: "chat:event", data: { chatId, type: "error", message, provider } });
@@ -383,6 +401,15 @@ async function handleWsMessage(
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 async function boot(): Promise<void> {
+  // Strip Claude Code session vars so spawned claude processes use normal OAuth
+  // auth instead of trying to authenticate against the parent session.
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("CLAUDE_CODE") || key === "CLAUDECODE") {
+      delete process.env[key];
+    }
+  }
+  console.log("[lmcanvas] CLAUDECODE after strip:", process.env.CLAUDECODE ?? "undefined");
+
   try {
     process.env.PATH = await getShellPath();
   } catch {

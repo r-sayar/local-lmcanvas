@@ -73,9 +73,10 @@ type Props = {
   /** Click handler for a `<next-steps>` suggestion button — receives the
    *  full prompt the button represents. */
   onSuggestionClick?: (prompt: string) => void;
+  onDismissError?: () => void;
 };
 
-export function NodeResponse({ message, onStop, nodeId, onSuggestionClick }: Props) {
+export function NodeResponse({ message, onStop, nodeId, onSuggestionClick, onDismissError }: Props) {
   const isUser = message.role === "user";
   const isError = message.status === "error";
   const isStreaming = message.status === "streaming";
@@ -127,7 +128,7 @@ export function NodeResponse({ message, onStop, nodeId, onSuggestionClick }: Pro
             return <TextBlockView key={item.key} text={item.text} nodeId={nodeId} />;
           }
           if (item.kind === "thinking") {
-            return <ThinkingView key={item.key} text={item.text} />;
+            return null;
           }
           const awaitingText = isStreaming && idx === lastIdx;
           return (
@@ -150,7 +151,7 @@ export function NodeResponse({ message, onStop, nodeId, onSuggestionClick }: Pro
         </div>
       )}
 
-      {isError && message.error && <ErrorBlock message={message} />}
+      {isError && message.error && <ErrorBlock message={message} onDismiss={onDismissError} />}
 
       {message.suggestions && message.suggestions.length > 0 && onSuggestionClick && (
         <SuggestionButtons

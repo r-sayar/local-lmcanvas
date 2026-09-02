@@ -99,6 +99,7 @@ export type CanvasStoreState = {
     error: string,
     opts?: { code?: ErrorCode; provider?: Provider }
   ) => void;
+  dismissMessageError: (nodeId: NodeId, messageId: string) => void;
   clearMessages: (nodeId: NodeId) => void;
   getHistoryForNode: (id: NodeId) => Message[];
   serialize: () => Canvas | null;
@@ -374,14 +375,14 @@ export function createCanvasStoreApi(): CanvasStoreApi {
           for (const key of Object.keys(patch) as (keyof NodeSettings)[]) {
             const value = patch[key];
             if (value === undefined) delete merged[key];
-            else if (key === "provider") merged.provider = value as Provider;
-            else if (key === "cwd") merged.cwd = value as string;
-            else if (key === "branch") merged.branch = value as string;
+            else (merged as Record<string, unknown>)[key] = value;
           }
           const hasAny =
             merged.provider !== undefined ||
+            merged.model !== undefined ||
             merged.cwd !== undefined ||
-            merged.branch !== undefined;
+            merged.branch !== undefined ||
+            merged.planMode !== undefined;
           const nextData = { ...existing.data };
           if (hasAny) nextData.nodeSettings = merged;
           else delete nextData.nodeSettings;
@@ -730,6 +731,22 @@ export function createCanvasStoreApi(): CanvasStoreApi {
               error,
               errorCode: opts?.code,
               errorProvider: opts?.provider,
+            }))
+          );
+          return nodes ? { nodes } : s;
+        });
+        get().markDirty();
+      },
+
+      dismissMessageError: (nodeId, messageId) => {
+        set((s) => {
+          const nodes = updateMessages(s.nodes, nodeId, (messages) =>
+            mapMessage(messages, messageId, (m) => ({
+              ...m,
+              status: "complete",
+              error: undefined,
+              errorCode: undefined,
+              errorProvider: undefined,
             }))
           );
           return nodes ? { nodes } : s;

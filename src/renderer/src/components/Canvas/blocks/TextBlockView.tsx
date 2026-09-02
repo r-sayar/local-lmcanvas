@@ -17,6 +17,16 @@ type Props = {
 type CodeProps = ComponentPropsWithoutRef<"code"> & { inline?: boolean };
 type AnchorProps = ComponentPropsWithoutRef<"a">;
 
+function extractText(node: React.ReactNode): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join("");
+  if (React.isValidElement(node)) {
+    return extractText((node.props as { children?: React.ReactNode }).children);
+  }
+  return "";
+}
+
 function isExternalHref(href: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(href) || /^mailto:/i.test(href);
 }
@@ -175,7 +185,7 @@ function TextBlockViewImpl({ text, isUser, nodeId }: Props) {
     const base: Components = {
       code(props) {
         const { inline, className, children, ...rest } = props as CodeProps;
-        const codeString = String(children ?? "").replace(/\n$/, "");
+        const codeString = extractText(children).replace(/\n$/, "");
         const langMatch = /language-(\w+)/.exec(className ?? "");
         const language = langMatch?.[1];
         const looksInline =
@@ -193,7 +203,9 @@ function TextBlockViewImpl({ text, isUser, nodeId }: Props) {
             code={codeString}
             language={language}
             innerProps={{ className, ...rest }}
-          />
+          >
+            {children}
+          </CodeBlock>
         );
       },
       img({ alt, src }) {

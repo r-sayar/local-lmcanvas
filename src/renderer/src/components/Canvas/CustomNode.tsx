@@ -1,7 +1,7 @@
-import { memo, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useMemo, useRef, useState } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { GitMerge, Plus } from "lucide-react";
+import { CornerDownRight, GitMerge, Plus } from "lucide-react";
 import clsx from "clsx";
 import { MergeButton } from "./MergeButton";
 import { useCanvasStore } from "@/hooks/useCanvasStore";
@@ -38,6 +38,7 @@ function CustomNodeImpl(props: NodeProps) {
   const { id, data, selected } = props;
   const nodeData = data as CustomNodeData;
   const { submit, stop, streaming } = useNodeChat(id);
+  const dismissMessageError = useCanvasStore((s) => s.dismissMessageError);
   const removeNode = useCanvasStore((s) => s.removeNode);
   const patchNode = useCanvasStore((s) => s.patchNode);
   const merging = useCanvasStore((s) => s.merging);
@@ -45,18 +46,22 @@ function CustomNodeImpl(props: NodeProps) {
   const startMerge = useCanvasStore((s) => s.startMerge);
   const toggleMergeNode = useCanvasStore((s) => s.toggleMergeNode);
   const askUserRequest = useAskUserStore((s) => s.byNode[id]);
-  const totalNodeCount = useCanvasStore((s) => Object.keys(s.nodes).length);
+  const isSingleNode = useCanvasStore((s) => Object.keys(s.nodes).length === 1);
 
   const [hovered, setHovered] = useState(false);
+  const [showAppendInput, setShowAppendInput] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<NodePromptInputHandle | null>(null);
   const selection = useSelection(rootRef);
 
   const messages = nodeData.chat.messages;
   const userMessage = messages.find((m) => m.role === "user");
-  const assistantMessage = messages.find((m) => m.role === "assistant");
   const hasSubmitted = Boolean(userMessage);
   const canEditPrompt = hasSubmitted;
+  const lastAssistantMsgIdx = messages.reduce<number>(
+    (last, m, idx) => (m.role === "assistant" ? idx : last),
+    -1,
+  );
 
   const userText = userMessage
     ? userMessage.blocks
@@ -117,7 +122,7 @@ function CustomNodeImpl(props: NodeProps) {
     : "";
 
   const showFollowUp = (hovered || selected) && hasSubmitted;
-  const showOnboarding = totalNodeCount === 1 && messages.length === 0 && !streaming;
+  const showOnboarding = isSingleNode && messages.length === 0 && !streaming;
   const isMergeSource = merging && mergeIds[0] === id;
   const isMergeSelected = merging && mergeIds.includes(id);
   const isMergeNode = nodeData.chat.parentIds.length > 1;
@@ -276,53 +281,87 @@ function CustomNodeImpl(props: NodeProps) {
               autoFocus
             />
           )}
-          {userMessage && !promptEdit.isEditing && (
-            <div
-              onClick={promptEdit.begin}
-              className={clsx(canEditPrompt ? "cursor-text" : "cursor-default")}
-              title={canEditPrompt ? "Click to edit prompt" : undefined}
-            >
-              <NodeResponse message={userMessage} nodeId={id} />
-            </div>
-          )}
-          {userMessage && promptEdit.isEditing && (
-            <div className="-mx-1 -my-0.5 rounded-md bg-accent/10 px-1 py-0.5 ring-1 ring-accent/30">
+
+          {messages.map((msg, idx) => {
+            const isFirstUser = msg.role === "user" && idx === 0;
+            const isLastAsst = idx === lastAssistantMsgIdx;
+            return (
+              <Fragment key={msg.id}>
+                {idx > 0 && (
+                  <div className="my-4">
+                    <div className="h-px flex-1 bg-border" />
+                  </div>
+                )}
+                {isFirstUser && !promptEdit.isEditing ? (
+                  <div
+                    onClick={promptEdit.begin}
+                    className={clsx(canEditPrompt ? "cursor-text" : "cursor-default")}
+                    title={canEditPrompt ? "Click to edit prompt" : undefined}
+                  >
+                    <NodeResponse message={msg} nodeId={id} />
+                  </div>
+                ) : isFirstUser && promptEdit.isEditing ? (
+                  <div className="-mx-1 -my-0.5 rounded-md bg-accent/10 px-1 py-0.5 ring-1 ring-accent/30">
+                    <NodePromptInput
+                      ref={promptInputRef}
+                      nodeId={id}
+                      initialValue={userText}
+                      initialAttachments={userAttachments}
+                      onSubmit={promptEdit.commit}
+                      onCancel={promptEdit.cancel}
+                      onStop={stop}
+                      streaming={streaming}
+                      autoFocus
+                    />
+                    <div className="pt-1 text-[9px] leading-none text-muted-foreground">
+                      Editing — Enter to resend, Esc to cancel
+                    </div>
+                  </div>
+                ) : msg.role === "user" ? (
+                  <NodeResponse message={msg} nodeId={id} />
+                ) : (
+                  <NodeResponse
+                    message={msg}
+                    onStop={msg.status === "streaming" ? stop : undefined}
+                    nodeId={id}
+                    onSuggestionClick={
+                      isLastAsst
+                        ? (prompt) =>
+                            branch({
+                              prefill: prompt,
+                              autoSubmit: true,
+                              placeBelow: true,
+                              focusViewport: false,
+                            })
+                        : undefined
+                    }
+                    onDismissError={
+                      msg.status === "error"
+                        ? () => dismissMessageError(id, msg.id)
+                        : undefined
+                    }
+                  />
+                )}
+              </Fragment>
+            );
+          })}
+
+          {showAppendInput && !streaming && (
+            <div className="mt-3 pt-3 border-t border-border/50">
               <NodePromptInput
-                ref={promptInputRef}
                 nodeId={id}
-                initialValue={userText}
-                initialAttachments={userAttachments}
-                onSubmit={promptEdit.commit}
-                onCancel={promptEdit.cancel}
+                onSubmit={(text, attachments) => {
+                  setShowAppendInput(false);
+                  submit(text, attachments);
+                }}
                 onStop={stop}
                 streaming={streaming}
                 autoFocus
+                onCancel={() => setShowAppendInput(false)}
               />
-              <div className="pt-1 text-[9px] leading-none text-muted-foreground">
-                Editing — Enter to resend, Esc to cancel
-              </div>
             </div>
           )}
-          {userMessage && assistantMessage && (
-            <div className="my-4">
-              <div className="h-px flex-1 bg-border" />
-            </div>
-          )}
-          {assistantMessage && (
-            <NodeResponse
-              message={assistantMessage}
-              onStop={stop}
-              nodeId={id}
-              onSuggestionClick={(prompt) =>
-                branch({
-                  prefill: prompt,
-                  autoSubmit: true,
-                  placeBelow: true,
-                  focusViewport: false,
-                })
-              }
-            />
-          )}
+
           {askUserRequest && <AskUserPrompt request={askUserRequest} />}
         </div>
 
@@ -373,6 +412,22 @@ function CustomNodeImpl(props: NodeProps) {
               onClick={startMerge}
             />
           )}
+          {!merging && !streaming && !showAppendInput && (
+            <button
+              type="button"
+              onClick={() => setShowAppendInput(true)}
+              onMouseDown={(e) => e.stopPropagation()}
+              disabled={!showFollowUp}
+              className={clsx(
+                "flex h-7 items-center justify-center rounded-xl border border-border/60 bg-card text-foreground/70 px-2 text-xs font-semibold shadow-lg transition hover:bg-muted hover:opacity-90",
+                showFollowUp ? "cursor-pointer" : "cursor-default",
+              )}
+              title="Append to this block"
+              aria-label="Append to block"
+            >
+              <CornerDownRight className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => branch()}
@@ -382,8 +437,8 @@ function CustomNodeImpl(props: NodeProps) {
               "flex h-7 min-w-[50px] items-center justify-center gap-2 rounded-xl bg-foreground text-card px-2 text-xs font-semibold shadow-lg transition hover:opacity-90",
               showFollowUp ? "cursor-pointer" : "cursor-default",
             )}
-            title="Follow up · or begin typing"
-            aria-label="Create follow-up"
+            title="New block"
+            aria-label="Create new block"
           >
             <Plus className="h-3.5 w-3.5" />
           </button>

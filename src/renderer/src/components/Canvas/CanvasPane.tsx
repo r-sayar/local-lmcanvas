@@ -22,6 +22,7 @@ import { FALLBACK_NODE_HEIGHT, NODE_WIDTH } from "@/lib/canvasConstants";
 import { useRegisterPaneStore } from "@/hooks/usePaneRegistry";
 import { useBranchRequestStore } from "@/hooks/useBranchRequestStore";
 import { useBranchFromNode } from "@/hooks/useBranchFromNode";
+import { useTerminalCapture } from "@/hooks/useTerminalCapture";
 
 type CanvasPaneProps = {
   /** The canvas to load into this pane. Also serves as the pane's identity. */
@@ -65,6 +66,7 @@ export function CanvasPane({ id, splitMode, controlsSide = "right" }: CanvasPane
 function CanvasPaneInner({ id, splitMode, controlsSide = "right" }: CanvasPaneProps) {
   const storeApi = useCanvasStoreApi();
   useRegisterPaneStore(id, storeApi);
+  useTerminalCapture();
   const loadCanvas = useCanvasStore((s) => s.loadCanvas);
   const loaded = useCanvasStore((s) => s.loaded);
   const canvasId = useCanvasStore((s) => s.canvasId);

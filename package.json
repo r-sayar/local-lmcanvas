@@ -12,12 +12,17 @@
   "bugs": {
     "url": "https://github.com/max-lee-dev/local-lmcanvas/issues"
   },
+  "main": "./out/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"tsx watch server/index.ts\" \"vite\"",
-    "build": "vite build",
-    "start": "tsx server/index.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.web.json"
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.web.json",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder --publish never"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.141",
