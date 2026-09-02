@@ -10,12 +10,14 @@ Guide for AI coding agents (Claude Code, Cursor, Codex, etc.) working in this re
 
 ```bash
 bun install
-bun run dev         # launches the Electron app
-bun run typecheck   # REQUIRED before claiming work complete
-bun run build       # production build
+bun run dev          # launches the Electron app
+bun run typecheck    # REQUIRED before claiming work complete (main + renderer)
+bun run build        # production build
+bun run e2e:parity   # optional: session resume / forking / plan mode vs the real CLI
 ```
 
-There are no tests and no lint script. Don't try to run them.
+There is no lint script and no test suite. `e2e:parity` is a manual smoke check,
+not CI: it needs an authenticated `claude` and spends tokens.
 
 ## Project layout
 
@@ -27,9 +29,25 @@ There are no tests and no lint script. Don't try to run them.
 ## Hot files
 
 - `src/main/index.ts` — IPC handler registration and `BrowserWindow` setup.
+- `src/main/chatRun.ts` — one prompt turn. **Both hosts call this.** Put shared
+  run logic here, never in a host, or the two will drift apart again.
+- `src/main/claude/options.ts` — the single place a Claude Code flag becomes a
+  value we send. Add new CLI options here, not inline in the runner.
 - `src/shared/history.ts` — graph traversal / message-history reconstruction.
-- `src/renderer/src/hooks/useCanvasStore.ts` — Zustand store, ~530 lines.
-- `src/renderer/src/components/Canvas/CustomNode.tsx` — node UI, ~550 lines.
+- `src/renderer/src/hooks/useCanvasStore.ts` — Zustand store.
+- `src/renderer/src/components/Canvas/CustomNode.tsx` — node UI.
+
+## Gotchas
+
+- `NodeSettings` has a companion `NODE_SETTINGS_KEYS` / `hasNodeSettings()` in
+  `src/shared/types.ts`. Use them. Hand-written field lists are what made model
+  overrides silently vanish and the Fast badge do nothing.
+- History is not re-sent when a node has a session to resume. If you change
+  `ChatStartArgs.history` handling, re-run `bun run e2e:parity` — a broken
+  resume still looks like it works, it just quietly forgets.
+- Claude runs through `runClaude`, not `runAgent`. `runAgent` is for the plain
+  subprocess providers (codex, cursor) and deliberately cannot express sessions
+  or permissions.
 
 ## Conventions
 
