@@ -20,8 +20,12 @@ type CaptureSession = {
  *   lmc:terminal-capture-start  – create a node and begin streaming
  *   lmc:terminal-chunk          – CustomEvent<string>, append text delta
  *   lmc:terminal-capture-end    – finalize the message
+ *
+ * `active` gates the listeners. The hook is mounted once per pane but the
+ * events are global, so in split view both panes used to build their own
+ * capture node from the same byte stream. Only the active pane should answer.
  */
-export function useTerminalCapture() {
+export function useTerminalCapture(active: boolean) {
   const addNode = useCanvasStore((s) => s.addNode);
   const appendMessage = useCanvasStore((s) => s.appendMessage);
   const appendTextDelta = useCanvasStore((s) => s.appendTextDelta);
@@ -31,6 +35,8 @@ export function useTerminalCapture() {
   const sessionRef = useRef<CaptureSession | null>(null);
 
   useEffect(() => {
+    if (!active) return;
+
     const onStart = () => {
       const state = storeApi.getState();
       const nodeList = Object.values(state.nodes);
@@ -88,5 +94,5 @@ export function useTerminalCapture() {
       window.removeEventListener("lmc:terminal-chunk", onChunk);
       window.removeEventListener("lmc:terminal-capture-end", onEnd);
     };
-  }, [addNode, appendMessage, appendTextDelta, finalizeMessage, storeApi]);
+  }, [active, addNode, appendMessage, appendTextDelta, finalizeMessage, storeApi]);
 }

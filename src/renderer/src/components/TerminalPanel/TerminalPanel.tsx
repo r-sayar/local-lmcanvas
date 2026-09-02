@@ -6,7 +6,11 @@ import { X, TerminalSquare, Circle } from "lucide-react";
 import { useTerminalStore } from "@/hooks/useTerminalStore";
 
 // Strip ANSI escape codes so raw terminal bytes become plain text.
-const ANSI_RE = /[][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]|[][()][A-Z0-9]|[A-Z\\]||\r/g;
+// Written with explicit escapes: the equivalent literal ESC, CSI and BEL bytes
+// are invisible in an editor and do not survive a copy-paste, which makes the
+// pattern look broken when it isn't.
+const ANSI_RE =
+  /[\x1b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]|[\x1b\u009b][()][A-Z0-9]|\x1b[A-Z\\]|\x07|\r/g;
 function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, "");
 }

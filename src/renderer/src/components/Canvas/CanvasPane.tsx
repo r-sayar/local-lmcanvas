@@ -66,7 +66,6 @@ export function CanvasPane({ id, splitMode, controlsSide = "right" }: CanvasPane
 function CanvasPaneInner({ id, splitMode, controlsSide = "right" }: CanvasPaneProps) {
   const storeApi = useCanvasStoreApi();
   useRegisterPaneStore(id, storeApi);
-  useTerminalCapture();
   const loadCanvas = useCanvasStore((s) => s.loadCanvas);
   const loaded = useCanvasStore((s) => s.loaded);
   const canvasId = useCanvasStore((s) => s.canvasId);
@@ -83,6 +82,10 @@ function CanvasPaneInner({ id, splitMode, controlsSide = "right" }: CanvasPanePr
   const centerOnNode = useCenterOnNode();
 
   const isActive = activePaneId === id;
+
+  // Terminal-capture events are global; only the focused pane should consume
+  // them, otherwise split view builds two nodes from one byte stream.
+  useTerminalCapture(!splitMode || isActive);
 
   useEffect(() => {
     if (id && canvasId !== id) void loadCanvas(id);
