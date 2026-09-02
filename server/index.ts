@@ -63,11 +63,6 @@ function sendToSession(sessionId: string, msg: object): void {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
-// ── Active chats: chatId → AbortController ───────────────────────────────────
-
-type ActiveChat = { controller: AbortController; nodeId: string; sessionId: string };
-const activeChats = new Map<string, ActiveChat>();
-
 // ── Express app ──────────────────────────────────────────────────────────────
 
 const app = express();
@@ -263,13 +258,13 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     sessions.delete(sessionId);
+    // A dropped socket takes its work with it: runs are aborted and any
+    // blocking ask-user / permission request is settled, so the CLI isn't left
+    // waiting on an answer that can no longer arrive. The chat registry now
+    // lives in chatRun, shared with the Electron host.
+    abortChatsForSession(sessionId);
     cancelAllForSession(sessionId);
-    // Cancel all chats from this session
-    for (const [chatId, entry] of activeChats) {
-      if (entry.sessionId !== sessionId) continue;
-      entry.controller.abort();
-      activeChats.delete(chatId);
-    }
+    cancelPermissionsForSession(sessionId);
   });
 
   // Send sessionId so client knows it's connected

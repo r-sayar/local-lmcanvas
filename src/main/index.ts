@@ -18,7 +18,11 @@ import {
 } from "./chatRun";
 import { getCapabilities, invalidateCapabilities } from "./claude/capabilities";
 import { mergeSlashItems, skillNames } from "./slashItems";
-import { respondToPermission, cancelPermissionsForSession } from "./claude/permissions";
+import {
+  respondToPermission,
+  cancelPermissionsForSession,
+  setAlwaysAllowedTools,
+} from "./claude/permissions";
 import {
   interruptRun,
   setRunPermissionMode,
@@ -93,6 +97,17 @@ function createWindow(hash?: string): BrowserWindow {
 
   win.on("ready-to-show", () => win.show());
 
+  // Closing a window must take its work with it. Otherwise its runs keep
+  // burning tokens with nowhere to deliver events, and any ask-user or
+  // permission request it was blocking on never settles — leaving the CLI
+  // subprocess waiting on an answer that can no longer arrive.
+  const sessionKey = sessionKeyFor(win.webContents.id);
+  win.webContents.once("destroyed", () => {
+    abortChatsForSession(sessionKey);
+    cancelAllForSession(sessionKey);
+    cancelPermissionsForSession(sessionKey);
+  });
+
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("http")) shell.openExternal(url);
     return { action: "deny" };
@@ -161,7 +176,31 @@ function registerIpc(): void {
   ipcMain.handle("canvases:delete", async (_e, id: string) => deleteCanvas(id));
 
   ipcMain.handle("settings:read", async () => readSettings());
-  ipcMain.handle("settings:write", async (_e, s: AppSettings) => writeSettings(s));
+  ipcMain.handle("settings:write", async (_e, s: AppSettings) => {
+    const previous = await readSettings();
+    const merged = await writeSettings(s);
+
+    // Anything that changes which binary we spawn, or what it loads, makes the
+    // cached capability probe stale — otherwise a new MCP server or a corrected
+    // binary path wouldn't show up for a minute, or until restart.
+    const binChanged =
+      previous.providers?.claude?.binPath !== merged.providers?.claude?.binPath ||
+      previous.claudeBinPath !== merged.claudeBinPath;
+    if (binChanged) clearSystemClaudeCache();
+    if (
+      binChanged ||
+      JSON.stringify(previous.mcpServers) !== JSON.stringify(merged.mcpServers) ||
+      JSON.stringify(previous.pluginPaths) !== JSON.stringify(merged.pluginPaths) ||
+      JSON.stringify(previous.settingSources) !== JSON.stringify(merged.settingSources)
+    ) {
+      invalidateCapabilities();
+    }
+
+    // Keep the in-memory allow-list in step with what was just saved, so
+    // un-ticking a rule in settings takes effect without a restart.
+    setAlwaysAllowedTools(merged.alwaysAllowedTools ?? []);
+    return merged;
+  });
 
   ipcMain.handle("dialog:pickFolder", async (_e, defaultPath?: string) => {
     const result = await dialog.showOpenDialog({
